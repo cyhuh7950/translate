@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en" data-loading>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <!--
+    문구가 이 파일에 없다. 전부 locales/*.json 에서 온다.
+    data-i18n 은 textContent 를, data-i18n-title 은 title 속성을 채운다.
+    선택지(언어·프로필·엔진·프로바이더·스타일) 역시 여기 없다 — GET /v1/config 로 그린다.
+  -->
+  <title data-i18n="app.title">Speech Translation</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" aria-hidden="true"></span>
+    <h1 data-i18n="app.title">Speech Translation</h1>
+  </div>
+  <div class="topbar-right">
+    <label class="inline">
+      <span class="sr-only" data-i18n="locale.label">Display language</span>
+      <select id="locale-select" aria-label="Display language"></select>
+    </label>
+    <button id="settings-toggle" type="button" class="ghost"
+            data-i18n="settings.toggle" data-i18n-title="settings.toggle">Settings</button>
+  </div>
+</header>
+
+<main>
+  <!-- 설정 패널. 내용은 전부 JS 가 /v1/config 응답으로 만든다. -->
+  <section id="settings" class="panel" aria-labelledby="settings-title">
+    <h2 id="settings-title" data-i18n="section.settings">Settings</h2>
+    <div id="settings-fields" class="fields"></div>
+    <p id="settings-meta" class="meta"></p>
+  </section>
+
+  <section class="panel ptt" aria-labelledby="ptt-title">
+    <h2 id="ptt-title" class="sr-only" data-i18n="ptt.title">Push to talk</h2>
+
+    <button id="ptt" type="button" class="ptt-button" disabled>
+      <span class="ptt-icon" aria-hidden="true"></span>
+      <span class="ptt-label" data-i18n="ptt.hold">Hold to talk</span>
+    </button>
+
+    <p class="hint" data-i18n="ptt.hint">Hold the button or the space bar. Release to translate.</p>
+
+    <div class="alt-input">
+      <label class="file-label">
+        <input id="file-input" type="file" accept="audio/*">
+        <span data-i18n="upload.label">Or upload an audio file</span>
+      </label>
+    </div>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="history-title">
+    <div class="panel-head">
+      <h2 id="history-title" data-i18n="history.title">Conversation</h2>
+      <button id="history-clear" type="button" class="ghost small"
+              data-i18n="history.clear">Clear</button>
+    </div>
+    <p id="history-empty" class="empty" data-i18n="history.empty">Nothing yet.</p>
+    <ol id="history" class="history" reversed></ol>
+  </section>
+</main>
+
+<footer>
+  <span id="server-info" class="meta"></span>
+</footer>
+
+<!-- 이력 항목 틀. 문구는 JS 가 채운다. -->
+<template id="turn-template">
+  <li class="turn">
+    <div class="turn-head">
+      <span class="route"></span>
+      <span class="clock"></span>
+    </div>
+    <div class="line source">
+      <span class="line-label" data-i18n="result.source">Heard</span>
+      <p class="text"></p>
+    </div>
+    <div class="deliveries"></div>
+    <div class="turn-foot">
+      <span class="engines"></span>
+      <span class="metrics"></span>
+    </div>
+  </li>
+</template>
+
+<template id="delivery-template">
+  <div class="line delivery">
+    <!-- 이 라벨은 JS 가 "번역 → 수신자" 로 채운다. data-i18n 을 두면 로케일 전환 때 덮인다. -->
+    <span class="line-label"></span>
+    <p class="text"></p>
+    <audio class="player" controls preload="none"></audio>
+  </div>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>

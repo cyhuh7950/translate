@@ -1,0 +1,54 @@
+# 웹 클라이언트 사이트 설정.
+#
+# 렌더링 결과: /etc/nginx/conf.d/site.conf
+# ${...} 는 엔트리포인트가 component.env 의 값으로 채운다. 이 파일에는 값이 없다.
+
+# WebSocket 업그레이드용. conf.d 는 http 컨텍스트라 map 을 여기 둘 수 있다.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen ${WEB_LISTEN_PORT};
+    listen [::]:${WEB_LISTEN_PORT};
+    server_name _;
+
+    # 오디오 업로드. 오케스트레이터의 server.max_upload_bytes 보다 넉넉하게 잡는다.
+    client_max_body_size ${MAX_UPLOAD_SIZE};
+    client_body_timeout  ${PROXY_READ_TIMEOUT};
+
+    root /usr/share/nginx/html;
+    index index.html;
+    charset utf-8;
+
+    # 마이크·오디오만 쓰는 정적 페이지다. 그 이상은 필요 없다.
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy       same-origin always;
+
+    # 웹 컨테이너 자신의 상태. 오케스트레이터가 죽어도 이건 200 이다.
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","component":"web"}';
+    }
+
+    # 규약상 /health 는 오케스트레이터의 헬스다 (translatectl status 가 이걸 본다).
+    location = /health {
+        include /etc/nginx/snippets/orchestrator-proxy.conf;
+    }
+
+    location /v1/ {
+        include /etc/nginx/snippets/orchestrator-proxy.conf;
+    }
+
+    # 설정과 문구는 매번 새로 받는다. 캐시된 언어 목록으로 UI 를 그리면
+    # "설정을 고치면 바로 반영된다"가 깨진다.
+    location ~* \.(json)$ {
+        add_header Cache-Control "no-store" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -38,6 +38,7 @@ from .adapters.routing.policies import ROUTING_KIND
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
 from .config import Config, ConfigError
 from .engines import EngineError, EngineRegistry
+from .i18n import localize
 from .i18n import normalize as normalize_locale
 from .llm import LLM_KIND, ProviderRegistry, Translator, Turn
 from .pipeline import Pipeline
@@ -71,6 +72,23 @@ class State:
         self.profiles.load()
         self.providers.invalidate()   # base_url·모델이 바뀌었을 수 있다
         return True
+
+
+def _languages_view(cfg: Config, locale: str | None) -> list[dict]:
+    """
+    선택 가능한 번역 언어. 목록도 표시 이름도 languages.yaml 에서 온다.
+
+    label 은 로케일 맵일 수 있으므로 프로필과 같은 방식으로 표시 언어에 맞춰 푼다.
+    label 이 없으면 code 를 그대로 쓴다 — 언어 하나 늘리자고 모든 로케일을
+    채우게 만들지 않기 위해서다.
+    """
+    out = []
+    for item in cfg.get("languages"):
+        code = (item.get("code") or "").strip()
+        if not code:
+            raise ConfigError("A languages entry has no code")
+        out.append({"code": code, "label": localize(item.get("label"), locale) or code})
+    return out
 
 
 def _config_dir() -> str:
@@ -163,7 +181,11 @@ def create_app() -> FastAPI:
                 "default_mode": c.get("session.default_mode"),
                 "allow_profile_override": c.get("session.allow_profile_override"),
                 "allow_mode_override": c.get("session.allow_mode_override"),
+                "default_source_lang": c.get("session.default_source_lang"),
+                "default_target_lang": c.get("session.default_target_lang"),
             },
+            # 번역 언어 선택지. 클라이언트에 언어 목록을 두지 않기 위해 여기서 내보낸다.
+            "languages": _languages_view(c, want_locale),
             # 단방향/양방향 선택지. 이름도 label 도 설정 파일에서 온다.
             "profiles": state.profiles.public_view(want_locale),
             "engines": state.engines.snapshot(),

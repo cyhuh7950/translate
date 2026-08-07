@@ -1,0 +1,32 @@
+# 웹 클라이언트 단독 서비스.
+#   translatectl.sh start web
+#
+# 오케스트레이터와 같은 proxy-network 에 붙어 컨테이너 이름으로 부른다.
+name: translate-web
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: translate-web:latest
+    container_name: translate-web
+    restart: unless-stopped
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-8402}:${WEB_LISTEN_PORT:-8402}"
+    env_file:
+      - component.env
+      # 오케스트레이터 API 키. 여기서 컨테이너 환경변수로 들어오고,
+      # 엔트리포인트가 ORCHESTRATOR_API_KEY_ENV 가 가리키는 이름으로 꺼내
+      # nginx 의 프록시 헤더에 심는다. 브라우저로는 절대 나가지 않는다.
+      # 없어도 기동은 된다 — 그 경우 헤더를 붙이지 않는다.
+      - path: ../config/secrets.env
+        required: false
+    mem_limit: ${MEM_LIMIT:-128m}
+    networks:
+      - proxy-network
+
+networks:
+  proxy-network:
+    name: proxy-network
+    external: true

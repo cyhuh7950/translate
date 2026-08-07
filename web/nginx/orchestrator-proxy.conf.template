@@ -1,0 +1,28 @@
+# 오케스트레이터로 넘길 때 공통으로 붙는 것들.
+# /v1/ 과 /health 두 곳에서 include 하므로 한 군데에만 적는다.
+#
+# 렌더링 결과: /etc/nginx/snippets/orchestrator-proxy.conf
+
+proxy_pass ${ORCHESTRATOR_URL};
+proxy_http_version 1.1;
+
+# API 키 주입. 엔트리포인트가 만든다. 키가 없으면 빈 값이라 헤더가 붙지 않는다.
+# 브라우저는 이 파일의 존재도 모른다.
+include /etc/nginx/snippets/upstream-auth.conf;
+
+proxy_set_header Host              $host;
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+# WebSocket(2단계 /v1/stream)이 붙어도 이 프록시를 그대로 쓴다.
+proxy_set_header Upgrade    $http_upgrade;
+proxy_set_header Connection $connection_upgrade;
+
+# 오디오 업로드는 통째로 버퍼링하지 않고 흘려보낸다.
+proxy_request_buffering off;
+
+# STT+LLM+TTS 는 CPU 에서 10초를 훌쩍 넘긴다. 프록시가 먼저 끊으면 안 된다.
+proxy_connect_timeout 10s;
+proxy_send_timeout    ${PROXY_READ_TIMEOUT};
+proxy_read_timeout    ${PROXY_READ_TIMEOUT};

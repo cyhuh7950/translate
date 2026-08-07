@@ -98,6 +98,10 @@ class Engine:
             "ready": self.ready,
             "model": self.info.get("model"),
             "languages": self.info.get("languages"),
+            # 보이스 목록도 관측값이다. 엔진이 /info 로 알려주는 것을 그대로 넘기므로
+            # 클라이언트가 "F1, M2 ..." 같은 목록을 들고 있을 이유가 없다.
+            "voices": self.info.get("voices"),
+            "default_voice": self.info.get("default_voice"),
             "error": self.last_error,
         }
 

@@ -1,0 +1,75 @@
+{
+  "app.title": "Speech Translation",
+
+  "locale.label": "Display language",
+  "settings.toggle": "Settings",
+
+  "section.settings": "Settings",
+
+  "field.source_lang": "I speak",
+  "field.target_lang": "Translate into",
+  "field.profile": "Session",
+  "field.mode": "Mode",
+  "field.provider": "Translation model",
+  "field.style": "Style",
+  "field.voice": "Voice",
+  "field.engine": "{kind} engine",
+  "field.with_audio": "Speak the translation",
+
+  "option.auto": "Auto",
+  "option.auto.hint": "Let the server pick by its routing policy",
+  "option.engine_default": "Engine default",
+
+  "kind.stt": "Speech-to-text",
+  "kind.tts": "Text-to-speech",
+
+  "mode.batch": "Batch",
+  "mode.ptt": "Push to talk",
+  "mode.realtime": "Realtime",
+
+  "style.literal": "Literal",
+  "style.natural": "Natural",
+
+  "badge.unavailable": "unavailable",
+  "badge.not_ready": "not ready",
+
+  "ptt.title": "Push to talk",
+  "ptt.hold": "Hold to talk",
+  "ptt.recording": "Recording — release to send",
+  "ptt.hint": "Hold the button or the space bar. Release to translate.",
+  "upload.label": "Or upload an audio file",
+
+  "status.ready": "Ready.",
+  "status.loading": "Loading settings…",
+  "status.recording": "Recording…",
+  "status.sending": "Translating… ({seconds}s)",
+  "status.done": "Done in {ms} ms.",
+  "status.empty": "Nothing was recognized in that recording.",
+
+  "history.title": "Conversation",
+  "history.empty": "Nothing yet.",
+  "history.clear": "Clear",
+
+  "result.source": "Heard",
+  "result.translation": "Translation",
+  "result.route": "{from} → {to}",
+  "result.engines": "Engines",
+
+  "metric.stt_ms": "STT",
+  "metric.llm_ms": "LLM",
+  "metric.tts_ms": "TTS",
+  "metric.total_ms": "Total",
+  "metric.audio_duration_s": "Audio",
+  "metric.skipped": "Skipped",
+
+  "server.info": "Server: {id} · orchestrator locale: {locale}",
+
+  "error.config": "Could not load settings from the server: {message}",
+  "error.locales": "Could not load the display language files: {message}",
+  "error.request": "Translation failed: {message}",
+  "error.mic": "Microphone unavailable: {message}",
+  "error.insecure": "The microphone needs HTTPS (or localhost). File upload still works.",
+  "error.no_recorder": "This browser cannot record audio. File upload still works.",
+  "error.no_profile": "No usable session profile. Check the orchestrator configuration.",
+  "error.no_language": "No translation languages are configured. Add them to config/languages.yaml."
+}

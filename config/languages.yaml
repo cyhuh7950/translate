@@ -1,0 +1,61 @@
+# 선택 가능한 번역 언어 — source_lang / target_lang 후보 목록.
+#
+# 이 목록은 클라이언트에 없다. GET /v1/config 응답의 "languages" 로 나가고,
+# 웹 클라이언트는 그것만 보고 선택 UI 를 그린다. 언어를 늘리고 줄이는 일은
+# 이 파일만 고치면 끝난다 (핫 리로드되므로 재기동도 필요 없다).
+#
+# code   ISO 639-1. 엔진과 LLM 에 그대로 넘어간다.
+# label  표시 이름. 문자열 하나로 써도 되고 로케일 맵으로 써도 된다.
+#        로케일 맵이면 en 이 기본어이고 없는 로케일은 en 으로 떨어진다.
+#        label 이 없으면 code 가 그대로 표시된다 — 언어를 하나 늘리려고
+#        모든 로케일의 번역을 채워야 하지는 않게 하기 위해서다.
+#
+# 여기 있다고 해서 모든 엔진이 그 언어를 지원한다는 뜻은 아니다.
+# 엔진별 지원 언어는 /v1/config 의 engines[].languages 에 따로 나간다
+# (엔진 /info 응답에서 관측한 값이다).
+#
+# 지금 붙어 있는 엔진 기준:
+#   supertonic(TTS) 31개 언어 · whisper(STT) 99개 언어 · moonshine(STT) ko/en
+# 그 교집합에서 실제로 쓸 만한 것만 골라 두었다. 필요하면 마음대로 늘린다.
+
+# 기본 선택값은 여기가 아니라 defaults.yaml 의 session.default_source_lang /
+# session.default_target_lang 에 있다. "목록"과 "기본값"은 다른 관심사다.
+
+languages:
+  - code: ko
+    label: { en: "Korean", ko: "한국어", ja: "韓国語" }
+  - code: en
+    label: { en: "English", ko: "영어", ja: "英語" }
+  - code: ja
+    label: { en: "Japanese", ko: "일본어", ja: "日本語" }
+  - code: es
+    label: { en: "Spanish", ko: "스페인어" }
+  - code: fr
+    label: { en: "French", ko: "프랑스어" }
+  - code: de
+    label: { en: "German", ko: "독일어" }
+  - code: it
+    label: { en: "Italian", ko: "이탈리아어" }
+  - code: pt
+    label: { en: "Portuguese", ko: "포르투갈어" }
+  - code: ru
+    label: { en: "Russian", ko: "러시아어" }
+  - code: nl
+    label: { en: "Dutch", ko: "네덜란드어" }
+  - code: pl
+    label: { en: "Polish", ko: "폴란드어" }
+  - code: id
+    label: { en: "Indonesian", ko: "인도네시아어" }
+  - code: hi
+    label: { en: "Hindi", ko: "힌디어" }
+  - code: ar
+    label: { en: "Arabic", ko: "아랍어" }
+  - code: vi
+    label: { en: "Vietnamese", ko: "베트남어" }
+  - code: tr
+    label: { en: "Turkish", ko: "터키어" }
+  - code: uk
+    label: { en: "Ukrainian", ko: "우크라이나어" }
+
+# 중국어(zh)처럼 지금 붙어 있는 TTS 가 못 내는 언어는 일부러 빼 두었다.
+# 텍스트만 필요하면 넣어도 되고, 지원하는 TTS 엔진을 붙이면 그때 추가하면 된다.

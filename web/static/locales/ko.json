@@ -1,0 +1,75 @@
+{
+  "app.title": "음성 번역",
+
+  "locale.label": "표시 언어",
+  "settings.toggle": "설정",
+
+  "section.settings": "설정",
+
+  "field.source_lang": "말하는 언어",
+  "field.target_lang": "번역할 언어",
+  "field.profile": "세션 구성",
+  "field.mode": "모드",
+  "field.provider": "번역 모델",
+  "field.style": "번역 스타일",
+  "field.voice": "보이스",
+  "field.engine": "{kind} 엔진",
+  "field.with_audio": "번역을 음성으로 듣기",
+
+  "option.auto": "자동",
+  "option.auto.hint": "서버의 라우팅 정책이 고른다",
+  "option.engine_default": "엔진 기본값",
+
+  "kind.stt": "음성 인식",
+  "kind.tts": "음성 합성",
+
+  "mode.batch": "배치",
+  "mode.ptt": "PTT",
+  "mode.realtime": "실시간",
+
+  "style.literal": "직역",
+  "style.natural": "자연스럽게",
+
+  "badge.unavailable": "사용 불가",
+  "badge.not_ready": "준비 안 됨",
+
+  "ptt.title": "눌러서 말하기",
+  "ptt.hold": "누른 채 말하세요",
+  "ptt.recording": "녹음 중 — 떼면 전송",
+  "ptt.hint": "버튼이나 스페이스바를 누르고 있는 동안 녹음됩니다. 떼면 번역합니다.",
+  "upload.label": "또는 오디오 파일 올리기",
+
+  "status.ready": "준비됨.",
+  "status.loading": "설정을 불러오는 중…",
+  "status.recording": "녹음 중…",
+  "status.sending": "번역 중… ({seconds}초)",
+  "status.done": "{ms}ms 만에 완료.",
+  "status.empty": "인식된 말이 없습니다.",
+
+  "history.title": "대화",
+  "history.empty": "아직 없습니다.",
+  "history.clear": "지우기",
+
+  "result.source": "원문",
+  "result.translation": "번역",
+  "result.route": "{from} → {to}",
+  "result.engines": "엔진",
+
+  "metric.stt_ms": "인식",
+  "metric.llm_ms": "번역",
+  "metric.tts_ms": "합성",
+  "metric.total_ms": "합계",
+  "metric.audio_duration_s": "오디오",
+  "metric.skipped": "건너뜀",
+
+  "server.info": "서버: {id} · 오케스트레이터 로케일: {locale}",
+
+  "error.config": "서버에서 설정을 불러오지 못했습니다: {message}",
+  "error.locales": "표시 언어 파일을 불러오지 못했습니다: {message}",
+  "error.request": "번역에 실패했습니다: {message}",
+  "error.mic": "마이크를 쓸 수 없습니다: {message}",
+  "error.insecure": "마이크는 HTTPS(또는 localhost)에서만 열립니다. 파일 업로드는 그대로 됩니다.",
+  "error.no_recorder": "이 브라우저는 녹음을 지원하지 않습니다. 파일 업로드는 그대로 됩니다.",
+  "error.no_profile": "쓸 수 있는 세션 프로필이 없습니다. 오케스트레이터 설정을 확인하세요.",
+  "error.no_language": "번역 언어가 설정돼 있지 않습니다. config/languages.yaml 에 추가하세요."
+}

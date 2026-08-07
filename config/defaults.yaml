@@ -31,6 +31,10 @@ session:
   allow_profile_override: true
   default_mode: batch
   allow_mode_override: true
+  # 클라이언트가 처음 열었을 때 고를 언어. 선택 가능한 목록은 languages.yaml 에 있다.
+  # 목록과 기본값은 다른 관심사라 파일을 나눠 둔다.
+  default_source_lang: ko
+  default_target_lang: en
   # 프로필 없이 참여자를 직접 넘길 때 쓰는 값들
   default_speaker_id: manual
   default_turn_policy: half_duplex

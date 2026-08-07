@@ -1,0 +1,8 @@
+{
+  "_comment": "선택 가능한 표시 언어. 로케일을 추가하려면 <code>.json 을 만들고 여기 한 줄 넣으면 된다. 목록이 JS 에 없다.",
+  "fallback": "en",
+  "locales": [
+    { "code": "en", "label": "English" },
+    { "code": "ko", "label": "한국어" }
+  ]
+}
