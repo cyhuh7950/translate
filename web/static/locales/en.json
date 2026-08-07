@@ -5,7 +5,9 @@
   "settings.toggle": "Settings",
 
   "section.settings": "Settings",
+  "section.input": "Input",
 
+  "field.input_mode": "Input method",
   "field.source_lang": "I speak",
   "field.target_lang": "Translate into",
   "field.profile": "Session",
@@ -33,10 +35,31 @@
   "badge.unavailable": "unavailable",
   "badge.not_ready": "not ready",
 
+  "input_mode.ptt": "Push to talk",
+  "input_mode.ptt.hint": "Record while you hold the button, then upload it",
+  "input_mode.handsfree": "Hands-free",
+  "input_mode.handsfree.hint": "Keep the microphone open — the server cuts each utterance",
+
   "ptt.title": "Push to talk",
   "ptt.hold": "Hold to talk",
   "ptt.recording": "Recording — release to send",
   "ptt.hint": "Hold the button or the space bar. Release to translate.",
+
+  "handsfree.title": "Hands-free",
+  "handsfree.hint": "Just speak. The server detects when you stop and translates that stretch.",
+  "handsfree.start": "Start listening",
+  "handsfree.stop": "Stop listening",
+  "handsfree.connected": "Connected — {rate} Hz {format}, VAD: {vad}.",
+  "handsfree.restarting": "Applying the new settings…",
+  "handsfree.too_short": "That was too short to translate.",
+
+  "handsfree.state.idle": "Microphone off",
+  "handsfree.state.connecting": "Connecting…",
+  "handsfree.state.listening": "Listening",
+  "handsfree.state.speaking": "Speech detected",
+  "handsfree.state.processing": "Translating…",
+  "handsfree.state.playing": "Speaking the translation",
+
   "upload.label": "Or upload an audio file",
 
   "status.ready": "Ready.",
@@ -61,15 +84,23 @@
   "metric.total_ms": "Total",
   "metric.audio_duration_s": "Audio",
   "metric.skipped": "Skipped",
+  "metric.segment_ms": "Segment",
+  "metric.vad_speech_ms": "Speech",
+  "metric.segment_reason": "Cut by",
+  "metric.pipeline_ms": "Pipeline",
 
   "server.info": "Server: {id} · orchestrator locale: {locale}",
 
   "error.config": "Could not load settings from the server: {message}",
   "error.locales": "Could not load the display language files: {message}",
   "error.request": "Translation failed: {message}",
+  "error.stream": "Streaming session failed: {message}",
+  "error.stream_closed": "The streaming connection closed.",
   "error.mic": "Microphone unavailable: {message}",
   "error.insecure": "The microphone needs HTTPS (or localhost). File upload still works.",
   "error.no_recorder": "This browser cannot record audio. File upload still works.",
+  "error.no_worklet": "This browser cannot stream audio (AudioWorklet is missing). Use push to talk.",
+  "error.no_input_mode": "No usable input method. Check client.input_modes in the server configuration.",
   "error.no_profile": "No usable session profile. Check the orchestrator configuration.",
   "error.no_language": "No translation languages are configured. Add them to config/languages.yaml."
 }

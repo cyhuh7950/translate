@@ -147,9 +147,19 @@ button { font: inherit; cursor: pointer; }
 
 #locale-select { width: auto; }
 
-/* ---------------------------------------------------------------- PTT */
+/* ---------------------------------------------------------------- 입력 */
 
-.ptt { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.input { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+/* 입력 방식 선택. 항목은 JS 가 /v1/config 로 만든다. */
+.input-mode { width: 100%; max-width: 320px; }
+.input-mode .field { width: 100%; }
+
+.mode-panel {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.mode-panel[hidden] { display: none; }
 
 .ptt-button {
   width: 100%;
@@ -190,6 +200,41 @@ button { font: inherit; cursor: pointer; }
   width: 26px; height: 26px; border-radius: 50%;
   background: currentColor;
   opacity: .9;
+}
+
+/* ---------------------------------------------------------------- 핸즈프리 */
+
+/* 마이크 레벨. "지금 듣고 있는가"를 눈으로 확인하는 유일한 수단이다. */
+.hf-meter {
+  width: 100%; max-width: 320px; height: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.hf-level {
+  display: block; height: 100%; width: 0%;
+  background: var(--accent);
+  transition: width .08s linear;
+}
+
+/* 상태 표시. 색은 상태 이름으로 고른다 — 문구는 카탈로그, 색은 여기. */
+.hf-state {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; font-size: 13px; color: var(--muted); min-height: 1.4em;
+}
+.hf-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.hf-state[data-state="listening"] .hf-dot { background: var(--accent); }
+.hf-state[data-state="speaking"]  .hf-dot { background: var(--danger); animation: pulse-dot 1s ease-in-out infinite; }
+.hf-state[data-state="processing"] .hf-dot { background: var(--busy); }
+.hf-state[data-state="playing"]   .hf-dot { background: var(--accent); animation: pulse-dot 1s ease-in-out infinite; }
+.hf-state[data-state="connecting"] .hf-dot { animation: pulse-dot 1s ease-in-out infinite; }
+
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .hf-state .hf-dot { animation: none; }
+  .hf-level { transition: none; }
 }
 
 .hint { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }

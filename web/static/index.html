@@ -38,15 +38,42 @@
     <p id="settings-meta" class="meta"></p>
   </section>
 
-  <section class="panel ptt" aria-labelledby="ptt-title">
-    <h2 id="ptt-title" class="sr-only" data-i18n="ptt.title">Push to talk</h2>
+  <section class="panel input" aria-labelledby="input-title">
+    <h2 id="input-title" class="sr-only" data-i18n="section.input">Input</h2>
 
-    <button id="ptt" type="button" class="ptt-button" disabled>
-      <span class="ptt-icon" aria-hidden="true"></span>
-      <span class="ptt-label" data-i18n="ptt.hold">Hold to talk</span>
-    </button>
+    <!--
+      입력 방식 선택. 선택지도 순서도 기본값도 여기 없다 —
+      GET /v1/config 의 client.input_modes / client.default_input_mode 에서 온다.
+      아래 두 패널은 data-input-mode 이름이 맞는 것 하나만 보인다.
+    -->
+    <div id="input-mode" class="input-mode"></div>
 
-    <p class="hint" data-i18n="ptt.hint">Hold the button or the space bar. Release to translate.</p>
+    <div class="mode-panel" data-input-mode="ptt" hidden>
+      <h3 class="sr-only" data-i18n="ptt.title">Push to talk</h3>
+      <button id="ptt" type="button" class="ptt-button" disabled>
+        <span class="ptt-icon" aria-hidden="true"></span>
+        <span class="ptt-label" data-i18n="ptt.hold">Hold to talk</span>
+      </button>
+      <p class="hint" data-i18n="ptt.hint">Hold the button or the space bar. Release to translate.</p>
+    </div>
+
+    <div class="mode-panel" data-input-mode="handsfree" hidden>
+      <h3 class="sr-only" data-i18n="handsfree.title">Hands-free</h3>
+      <button id="hf-toggle" type="button" class="ptt-button" disabled>
+        <span class="ptt-icon" aria-hidden="true"></span>
+        <span class="hf-label" data-i18n="handsfree.start">Start listening</span>
+      </button>
+
+      <!-- 마이크가 살아 있는지 눈으로 확인하는 곳. 레벨은 보내는 프레임에서 계산한다. -->
+      <div class="hf-meter" aria-hidden="true"><span id="hf-level" class="hf-level"></span></div>
+
+      <p id="hf-state" class="hf-state" data-state="idle" role="status" aria-live="polite">
+        <span class="hf-dot" aria-hidden="true"></span>
+        <span class="hf-state-text"></span>
+      </p>
+
+      <p class="hint" data-i18n="handsfree.hint">The server detects when you stop speaking.</p>
+    </div>
 
     <div class="alt-input">
       <label class="file-label">
