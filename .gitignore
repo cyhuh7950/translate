@@ -1,0 +1,19 @@
+# 비밀값 — LLM 프로바이더 API 키, 엔진 접근 키
+config/secrets.env
+*.key
+*.pem
+
+# 서버별로 다른 설정 (필요 시 config/*.example 을 복사해 쓴다)
+config/*.local.yaml
+
+# 파이썬
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*/.venv/
+
+# 작업 산출물
+*.wav
+*.mp3
+*.log
