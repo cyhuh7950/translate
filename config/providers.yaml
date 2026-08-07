@@ -1,0 +1,77 @@
+# LLM 프로바이더 — 번역을 담당한다.
+#
+# kind 는 어댑터 계열 이름이고 레지스트리에서 찾는다. OpenAI 호환이면 base_url 만 다르므로
+# 새 프로바이더 추가는 이 파일에 항목 하나 추가로 끝난다. 코드 수정이 없다.
+#
+# api_key_env 가 가리키는 환경변수는 config/secrets.env 에서 주입한다.
+# 키가 비어 있는 프로바이더는 GET /v1/config 응답에서 사용 불가로 표시된다.
+
+providers:
+  cerebras:
+    label: "Cerebras"
+    kind: openai_compatible
+    base_url: https://api.cerebras.ai/v1
+    api_key_env: LLM_KEY_CEREBRAS
+    default_model: ""
+    # 첫 토큰이 매우 빠르다 — 실시간 모드에 유리
+    fast: true
+
+  groq:
+    label: "Groq"
+    kind: openai_compatible
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: LLM_KEY_GROQ
+    default_model: ""
+    fast: true
+
+  mistral:
+    label: "Mistral"
+    kind: openai_compatible
+    base_url: https://api.mistral.ai/v1
+    api_key_env: LLM_KEY_MISTRAL
+    default_model: ""
+
+  openrouter:
+    label: "OpenRouter"
+    kind: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: LLM_KEY_OPENROUTER
+    default_model: ""
+
+  upstage:
+    label: "Upstage (Solar)"
+    kind: openai_compatible
+    base_url: https://api.upstage.ai/v1
+    api_key_env: LLM_KEY_UPSTAGE
+    default_model: ""
+
+  openai:
+    label: "OpenAI"
+    kind: openai_compatible
+    base_url: https://api.openai.com/v1
+    api_key_env: LLM_KEY_OPENAI
+    default_model: ""
+
+  ollama:
+    label: "Ollama (로컬)"
+    kind: openai_compatible
+    # 컨테이너 이름이든 IP든 상관없다. 그냥 URL 이다.
+    base_url: http://voice-ollama:8301/v1
+    api_key_env: LLM_KEY_OLLAMA
+    default_model: ""
+    # 로컬이므로 키가 없어도 사용 가능
+    requires_key: false
+
+  gemini:
+    label: "Google Gemini"
+    kind: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key_env: LLM_KEY_GEMINI
+    default_model: ""
+
+  anthropic:
+    label: "Anthropic Claude"
+    kind: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key_env: LLM_KEY_ANTHROPIC
+    default_model: ""

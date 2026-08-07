@@ -1,0 +1,29 @@
+# 세션 프로필 — 단방향/양방향 같은 구성을 이름으로 고를 수 있게 묶어둔다.
+#
+# 여기 있는 키 이름(oneway, twoway)은 코드에 없다. 이름을 바꾸거나 프로필을 더 만들어도
+# 코드는 그대로다. 클라이언트는 GET /v1/config 로 목록과 label 을 받아 UI 를 그린다.
+#
+# 참여자 하나 = (언어, 입력 받을지, 번역 결과를 누구에게 들려줄지)
+#   ${source_lang} / ${target_lang} 는 세션이 넘긴 값으로 치환된다.
+#
+# 프로필이 요구하는 어댑터(speaker_id 등)가 등록돼 있지 않으면 그 프로필은
+# 사용 불가로 표시되고, 강제로 열면 그 이유로 거부된다.
+
+profiles:
+  oneway:
+    label: "단방향 — 한 사람이 말하고 상대 언어로 출력"
+    description: "발표, 안내, 일방향 전달에 적합"
+    participants:
+      - { id: speaker,  lang: "${source_lang}", input: true,  output: [listener] }
+      - { id: listener, lang: "${target_lang}", input: false, output: [] }
+    speaker_id: manual
+    turn_policy: half_duplex
+
+  twoway:
+    label: "양방향 — 두 사람이 각자 언어로 대화"
+    description: "대화형 통역. 화자 식별이 필요하다"
+    participants:
+      - { id: a, lang: "${source_lang}", input: true, output: [b] }
+      - { id: b, lang: "${target_lang}", input: true, output: [a] }
+    speaker_id: language_detect
+    turn_policy: half_duplex

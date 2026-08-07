@@ -1,0 +1,8 @@
+# 빌드 컨텍스트는 translate 루트다. 아래는 이미지에 들어갈 이유가 없다.
+*/.venv/
+**/__pycache__/
+*.pyc
+config/secrets.env
+web/
+*.md
+*.log

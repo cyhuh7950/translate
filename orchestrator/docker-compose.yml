@@ -1,0 +1,32 @@
+# 오케스트레이터 단독 서비스.
+#   translatectl.sh start orchestrator
+name: translate-orchestrator
+
+services:
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: orchestrator/Dockerfile
+    image: translate-orchestrator:latest
+    container_name: translate-orchestrator
+    # 명시적으로 stop 하면 다시 뜨지 않는다.
+    restart: unless-stopped
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-8401}:8401"
+    env_file:
+      - component.env
+      # 비밀값(오케스트레이터 인증 키, 엔진 키, LLM 프로바이더 키).
+      # 없어도 기동은 된다 — 그 경우 인증이 꺼지고 프로바이더가 사용 불가로 표시된다.
+      - path: ../config/secrets.env
+        required: false
+    volumes:
+      # 설정을 읽기 전용으로 주입. 파일이 바뀌면 재기동 없이 반영된다(핫 리로드).
+      - ../config:/config:ro
+    mem_limit: ${MEM_LIMIT:-1g}
+    networks:
+      - proxy-network
+
+networks:
+  proxy-network:
+    name: proxy-network
+    external: true

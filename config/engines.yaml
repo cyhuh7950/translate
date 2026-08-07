@@ -1,0 +1,85 @@
+# 엔진 레지스트리 — 오케스트레이터가 호출할 STT/TTS 엔진 목록.
+#
+# 여기 적힌 URL 이 전부다. 오케스트레이터는 그 주소에 어떻게 닿는지(프록시+서브도메인,
+# 포트 직접 개방, 컨테이너 이름, 사설망) 알지 못하고 알 필요도 없다. 그냥 URL 문자열이다.
+#
+# 엔드포인트는 필요한 만큼 달 수 있다. when 조건이 맞는 것 중 priority 가 낮은 것부터 쓴다.
+#   when.same_server: true  → server.id 와 이 엔진의 server 가 같을 때만 후보
+#   when 없음               → 항상 후보
+#
+# modes 는 운영자가 실측 성능을 보고 정한다. 시스템이 RTF 를 보고 자동 판단하지 않는다.
+# 같은 엔진이라도 하드웨어에 따라 실시간 가능 여부가 달라지기 때문이다.
+
+engines:
+  # ── 오라클 서버 (ARM64 CPU) ─────────────────────────────────────────
+  - id: whisper
+    kind: stt
+    server: oracle
+    # RTF 1.12 (base/int8, ARM 4코어) — 발화보다 느려 실시간 불가
+    modes: [batch, ptt]
+    streaming: false
+    endpoints:
+      - url: http://voice-whisper:8101
+        when: { same_server: true }
+        priority: 10
+        api_key_env: ENGINE_KEY_WHISPER
+      - url: https://stt.whisper.sinsan.kr
+        priority: 20
+        api_key_env: ENGINE_KEY_WHISPER
+
+  - id: moonshine
+    kind: stt
+    server: oracle
+    # RTF 0.05~0.18 로 매우 빠르지만 한국어(tiny-ko)는 문장 끝을 자주 놓친다.
+    modes: [batch, ptt]
+    streaming: false
+    endpoints:
+      - url: http://voice-moonshine:8102
+        when: { same_server: true }
+        priority: 10
+        api_key_env: ENGINE_KEY_MOONSHINE
+      - url: https://stt.moonshine.sinsan.kr
+        priority: 20
+        api_key_env: ENGINE_KEY_MOONSHINE
+
+  - id: supertonic
+    kind: tts
+    server: oracle
+    # RTF 1.93. 31개 언어, 보이스 10종(M1~M5 / F1~F5)
+    modes: [batch, ptt]
+    streaming: false
+    endpoints:
+      - url: http://voice-supertonic:8201
+        when: { same_server: true }
+        priority: 10
+        api_key_env: ENGINE_KEY_SUPERTONIC
+      - url: https://tts.supertonic.sinsan.kr
+        priority: 20
+        api_key_env: ENGINE_KEY_SUPERTONIC
+
+  - id: melotts
+    kind: tts
+    server: oracle
+    # RTF 4.8 — 느리다. 품질 비교용.
+    modes: [batch]
+    streaming: false
+    endpoints:
+      - url: http://voice-melotts:8202
+        when: { same_server: true }
+        priority: 10
+        api_key_env: ENGINE_KEY_MELOTTS
+      - url: https://tts.melotts.sinsan.kr
+        priority: 20
+        api_key_env: ENGINE_KEY_MELOTTS
+
+  # ── GPU 서버 ────────────────────────────────────────────────────────
+  # WSL 쪽 엔진 설치가 끝나면 여기에 추가한다. 형식은 위와 같고, 코드 수정은 없다.
+  # - id: whisper-gpu
+  #   kind: stt
+  #   server: wsl-gpu
+  #   modes: [batch, ptt, realtime]
+  #   streaming: true
+  #   endpoints:
+  #     - url: https://stt.whisper-gpu.<도메인>
+  #       priority: 10
+  #       api_key_env: ENGINE_KEY_WHISPER_GPU
