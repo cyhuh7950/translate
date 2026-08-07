@@ -45,7 +45,7 @@ import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from . import registry
+from . import diagnostics, preprocess, registry
 from .adapters.llm._base import LLMError
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
 from .adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
@@ -74,6 +74,10 @@ class _Segment:
     pcm: np.ndarray
     speech_ms: int
     reason: str
+    # VAD 가 본 스트림상의 위치(ms). 진단 사이드카에만 쓰인다 —
+    # 저장된 오디오 길이와 비교하면 앞뒤로 얼마가 잘렸는지가 드러난다.
+    start_ms: int = 0
+    end_ms: int = 0
 
 
 class StreamHandler:
@@ -103,6 +107,7 @@ class StreamHandler:
 
         self._queue: asyncio.Queue[_Segment] = asyncio.Queue()
         self._seg = 0
+        self._speech_start_ms = 0            # 마지막 speech_start 위치 (진단용)
         self._send_lock = asyncio.Lock()
         self._worker: asyncio.Task | None = None
         self._current: asyncio.Task | None = None
@@ -363,6 +368,7 @@ class StreamHandler:
         for event in events:
             await self._send({"type": "vad", **event.meta(), **route})
             if event.state == SPEECH_START:
+                self._speech_start_ms = event.at_ms
                 action = self._turn.on_speech_start(self._turn_state)
                 if action == STOP_OUTPUT:
                     await self._send({"type": "tts.stop", **route})
@@ -376,6 +382,8 @@ class StreamHandler:
                         pcm=event.audio,
                         speech_ms=event.speech_ms or 0,
                         reason=event.reason or "silence",
+                        start_ms=self._speech_start_ms,
+                        end_ms=event.at_ms,
                     )
                 )
 
@@ -424,14 +432,21 @@ class StreamHandler:
     async def _process(self, segment: _Segment) -> None:
         loop = asyncio.get_running_loop()
         started = loop.time()
-        wav = pcm16_to_wav(
-            segment.pcm, sample_rate=self._sample_rate, channels=self._channels
-        )
-        seg_seconds = duration_s(segment.pcm.size, self._sample_rate)
+
+        # 배경 음성 게이트. VAD 가 경계를 옳게 잡아도 세그먼트 **안쪽**의 휴지 구간에
+        # 남은 TV·옆사람 소리는 그대로 STT 로 넘어간다. 그것을 여기서 지운다.
+        # PTT(HTTP 업로드)와 같은 구현을 쓴다 — app/preprocess.py 를 볼 것.
+        # 길이는 바뀌지 않으므로 아래 시간 계산과 진단 사이드카의 시간축은 그대로다.
+        pcm, gate_metrics = preprocess.filter_pcm(self._cfg, segment.pcm, self._sample_rate)
+
+        wav = pcm16_to_wav(pcm, sample_rate=self._sample_rate, channels=self._channels)
+        seg_seconds = duration_s(pcm.size, self._sample_rate)
 
         async def progress(stage: str, payload: dict) -> None:
             await self._on_stage(stage, payload)
 
+        result = None
+        failure: tuple[str, str] | None = None
         try:
             result = await self._ctx.pipeline.run_audio(
                 self._session,
@@ -444,13 +459,23 @@ class StreamHandler:
                 **self._options,
             )
         except (SessionError, SpeakerIdError) as exc:
-            await self._error("session.invalid", str(exc))
-            return
+            failure = ("session.invalid", str(exc))
         except (EngineError, LLMError) as exc:
-            await self._error("engine.failed", str(exc))
-            return
+            failure = ("engine.failed", str(exc))
         except RegistryError as exc:
-            await self._error("registry.failed", str(exc))
+            failure = ("registry.failed", str(exc))
+        finally:
+            # 진단 덤프. 꺼져 있으면 아무 일도 하지 않는다.
+            # 오류로 끝난 세그먼트야말로 들어봐야 하므로 finally 에 둔다.
+            self._dump_segment(
+                segment, wav, seg_seconds, result, failure,
+                elapsed_ms=round((loop.time() - started) * 1000),
+                gate_metrics=gate_metrics,
+            )
+
+        # 오류 통지는 덤프 뒤로 미룬다. 클라이언트에 보내는 내용과 시점은 그대로다.
+        if failure is not None:
+            await self._error(*failure)
             return
 
         # 대화 맥락 축적. 한국어는 주어 생략이 많아 맥락 없이는 대명사를 틀린다.
@@ -465,6 +490,7 @@ class StreamHandler:
                 del turns[:-limit]
 
         metrics = dict(result.metrics)
+        metrics.update(gate_metrics)
         metrics["segment_ms"] = round(seg_seconds * 1000)
         metrics["vad_speech_ms"] = segment.speech_ms
         metrics["segment_reason"] = segment.reason
@@ -476,6 +502,100 @@ class StreamHandler:
             "from": result.speaker,
             "to": [d.to for d in result.deliveries],
         })
+
+    # ---- 진단 -------------------------------------------------------------
+
+    def _dump_segment(
+        self,
+        segment: _Segment,
+        wav: bytes,
+        seg_seconds: float,
+        result: Any,
+        failure: tuple[str, str] | None,
+        *,
+        elapsed_ms: int,
+        gate_metrics: dict,
+    ) -> None:
+        """
+        VAD 가 잘라 STT 로 보낸 오디오를 그대로 디스크에 남긴다 (기본값: 꺼짐).
+
+        진단이 서비스를 멈추면 안 되므로 여기서 나는 모든 예외를 삼킨다. 설정이
+        빠진 경우도 마찬가지다 — 그때는 무엇을 채워야 하는지가 ConfigError 메시지에
+        그대로 들어 있으니 경고 로그로 충분하다.
+
+        저장 내용은 `diagnostics.py` 와 defaults.yaml 의 `diagnostics:` 를 볼 것.
+        **켜면 사용자 음성이 디스크에 남는다.**
+        """
+        try:
+            if not self._cfg.get("diagnostics.save_segments"):
+                return
+
+            duration_ms = round(seg_seconds * 1000)
+            record: dict[str, Any] = {
+                "seg": segment.seg,
+                "session_id": str(id(self)),
+                "audio": {
+                    "sample_rate": self._sample_rate,
+                    "channels": self._channels,
+                    "duration_ms": duration_ms,
+                    "bytes": len(wav),
+                },
+                # start_ms/end_ms 는 스트림 시작 기준이고 duration_ms 는 저장된 길이다.
+                # (end_ms - start_ms) 와 duration_ms 의 차이가 곧 꼬리에서 버린 무음이다.
+                "vad": {
+                    "backend": self._cfg.get("vad.backend"),
+                    "start_ms": segment.start_ms,
+                    "end_ms": segment.end_ms,
+                    "span_ms": max(0, segment.end_ms - segment.start_ms),
+                    "speech_ms": segment.speech_ms,
+                    "reason": segment.reason,
+                    "settings": self._cfg.get("vad"),
+                },
+                "session": {
+                    "profile": self._session.profile if self._session else None,
+                    "mode": self._session.mode if self._session else None,
+                    "turn_policy": self._session.turn_policy if self._session else None,
+                },
+                # 게이트를 거친 뒤의 오디오가 저장된다. STT 가 실제로 받은 것을
+                # 들어봐야 하므로 그 편이 맞다. 얼마나 잘렸는지는 gate_* 지표에 있다.
+                "audio_filter": {
+                    "enabled": self._cfg.get("audio_filter.enabled"),
+                    "implementation": self._cfg.get("audio_filter.implementation"),
+                    "settings": self._cfg.get("audio_filter"),
+                },
+                "metrics": {"pipeline_ms": elapsed_ms, **gate_metrics},
+                "error": None,
+            }
+            if failure is not None:
+                record["error"] = {"code": failure[0], "message": failure[1]}
+            if result is not None:
+                record["stt"] = {"text": result.source_text, "lang": result.source_lang}
+                record["engines"] = dict(result.engines)
+                record["translations"] = [
+                    {
+                        "to": d.to,
+                        "lang": d.lang,
+                        "text": d.text,
+                        "tts_duration_s": d.duration,
+                        "tts_bytes": len(d.audio) if d.audio else 0,
+                    }
+                    for d in result.deliveries
+                ]
+                record["metrics"].update(result.metrics)
+
+            path = diagnostics.save_segment(
+                self._cfg,
+                wav=wav,
+                seg=segment.seg,
+                duration_ms=duration_ms,
+                label=result.source_text if result is not None else "",
+                record=record,
+            )
+            log.info("Saved diagnostic segment: %s", path)
+        except Exception as exc:
+            log.warning(
+                "Could not save the diagnostic segment dump: %s: %s", type(exc).__name__, exc
+            )
 
     def _context_for(self) -> list[Turn]:
         """

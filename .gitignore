@@ -20,3 +20,6 @@ __pycache__/
 
 # 임시 비교용 샘플 (버전관리 대상 아님)
 web/static/samples/
+
+# 진단용 세그먼트 덤프 (diagnostics.save_segments). 사용자 음성이 들어 있다.
+diagnostics/

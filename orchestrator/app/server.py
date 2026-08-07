@@ -33,7 +33,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import registry
+from . import preprocess, registry
+from .adapters.audio_filter._base import AUDIO_FILTER_KIND
 from .adapters.llm._base import LLMError
 from .adapters.routing.policies import ROUTING_KIND
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
@@ -223,6 +224,12 @@ def create_app() -> FastAPI:
                 "silence_ms": c.get("vad.silence_ms"),
                 "min_speech_ms": c.get("vad.min_speech_ms"),
             },
+            # 배경 음성 게이트. 두 입력 경로(PTT·핸즈프리)에 같은 구현이 걸린다.
+            "audio_filter": {
+                "enabled": c.get("audio_filter.enabled"),
+                "implementation": c.get("audio_filter.implementation"),
+                "available": registry.available(AUDIO_FILTER_KIND),
+            },
             "turn": {
                 "default_policy": c.get("session.default_turn_policy"),
                 "available": registry.available(TURN_KIND),
@@ -275,12 +282,22 @@ def create_app() -> FastAPI:
         if len(audio) > limit:
             raise HTTPException(413, f"Audio is too large ({len(audio)} > {limit} bytes)")
 
+        # 배경 음성 게이트. 옆에서 TV 가 나오는 환경에서 사용자가 말을 쉬는 구간이
+        # STT 로 넘어가 그대로 받아적히는 것을 막는다. 핸즈프리(WS)도 같은 구현을 쓴다.
+        # 꺼져 있으면 바이트가 손대지 않은 채 그대로 지나간다.
+        audio, filename, content_type, gate_metrics = await preprocess.filter_upload(
+            c,
+            audio,
+            file.filename or c.get("audio.pcm_filename"),
+            file.content_type or "application/octet-stream",
+        )
+
         try:
             result = await state.pipeline.run_audio(
                 session,
                 audio=audio,
-                filename=file.filename or "audio.wav",
-                content_type=file.content_type or "application/octet-stream",
+                filename=filename,
+                content_type=content_type,
                 speaker_hint=speaker,
                 stt_engine=stt_engine,
                 tts_engine=tts_engine,
@@ -298,6 +315,9 @@ def create_app() -> FastAPI:
             raise HTTPException(502, str(exc)) from exc
         except RegistryError as exc:
             raise HTTPException(500, str(exc)) from exc
+
+        # 게이트가 얼마나 잘라냈는지는 응답의 metrics 로 나간다. 튜닝의 근거다.
+        result.metrics.update(gate_metrics)
 
         wants = response_mode or c.get("audio.response_mode")
         audible = [d for d in result.deliveries if d.audio]

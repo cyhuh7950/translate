@@ -22,6 +22,10 @@ services:
     volumes:
       # 설정을 읽기 전용으로 주입. 파일이 바뀌면 재기동 없이 반영된다(핫 리로드).
       - ../config:/config:ro
+      # 진단용 세그먼트 덤프. 호스트에서 꺼내 들어봐야 하므로 볼륨으로 뺀다.
+      # diagnostics.save_segments 가 false(기본)면 아무것도 쓰이지 않는다.
+      # 켜면 사용자 음성이 이 폴더에 평문 WAV 로 남는다 — .gitignore 에 들어 있다.
+      - ${DIAGNOSTICS_DIR:-../diagnostics}:/diagnostics
     mem_limit: ${MEM_LIMIT:-1g}
     networks:
       - proxy-network

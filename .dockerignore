@@ -6,3 +6,4 @@ config/secrets.env
 web/
 *.md
 *.log
+diagnostics/
