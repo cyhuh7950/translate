@@ -17,3 +17,6 @@ __pycache__/
 *.wav
 *.mp3
 *.log
+
+# 임시 비교용 샘플 (버전관리 대상 아님)
+web/static/samples/

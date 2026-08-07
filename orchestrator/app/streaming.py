@@ -1,0 +1,533 @@
+"""
+WebSocket 스트리밍 세션 — VAD 로 발화를 잘라 세그먼트 단위로 파이프라인을 돌린다.
+
+1단계 ⑤. 아직 스트리밍 STT 엔진이 없으므로(2단계) 세그먼트가 확정되면 그 구간을
+WAV 로 감싸 **기존 배치 파이프라인을 그대로** 호출한다. 파이프라인 로직은 여기 없다.
+
+이렇게 해서 얻는 것은 지연이다. PTT 는 버튼을 누르고 있는 동안 전부 녹음돼서
+(실측 10.74초 녹음에 실제 발화 2초) 무음까지 인식에 들어갔다. VAD 가 앞뒤 무음을
+버리면 STT 에 들어가는 오디오가 그만큼 줄고, STT 는 무음도 같은 속도로 처리하므로
+줄어든 만큼 그대로 시간이 준다.
+
+프로토콜은 DESIGN.md "API 규격" 을 따른다.
+
+  클라이언트 → 서버
+    {"type":"config", ...}                      최초 1회
+    <바이너리>                                   PCM16 mono, audio.stt_sample_rate
+    {"type":"control","action":"flush"}         강제 세그먼트 확정
+    {"type":"control","action":"cancel"}        진행 중인 것 취소
+    {"type":"control","action":"playback", "state":"start"|"end"}
+                                                재생 상태 보정 (턴 정책용, 선택)
+
+  서버 → 클라이언트
+    ready / vad / stt.final / llm.final / tts.chunk(+바이너리) / tts.done / metrics / error
+
+`stt.partial` 과 `llm.delta` 는 스트리밍 엔진이 없어 지금 나가지 않는다.
+**프로토콜에서 빼지는 않는다** — 2단계에서 같은 자리에 채운다.
+
+from/to 규약
+------------
+모든 이벤트에 `from` 과 `to` 가 붙는다. 단방향에서도 마찬가지다.
+타입만 다르다 — 수신자 하나에 대한 이벤트(llm.*, tts.*)의 `to` 는 문자열이고,
+발화자 쪽 이벤트(vad, stt.*, ready)의 `to` 는 수신자 id **배열**이다.
+다중 기기 토폴로지에서 클라이언트는 자기 id 가 `to` 에 들어 있는 것만 보면 된다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
+
+from . import registry
+from .adapters.llm._base import LLMError
+from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
+from .adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
+from .adapters.vad._base import SPEECH_END, SPEECH_START, VAD_KIND, VadError
+from .audio import duration_s, pcm16_from_bytes, pcm16_to_wav
+from .config import ConfigError
+from .engines import EngineError
+from .llm import Turn
+from .registry import RegistryError
+from .sessions import SessionError
+
+log = logging.getLogger("stream")
+
+
+class StreamError(Exception):
+    """클라이언트에 code 와 함께 돌려줄 오류. 메시지는 영어(기본어)로 쓴다."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass
+class _Segment:
+    seg: int
+    pcm: np.ndarray
+    speech_ms: int
+    reason: str
+
+
+class StreamHandler:
+    """
+    WS 연결 하나의 수명을 관리한다.
+
+    수신 루프와 처리 워커를 분리한다. 처리(STT→LLM→TTS)는 CPU 엔진에서 수초가
+    걸리므로 수신 루프에서 await 하면 그동안 들어온 오디오가 소켓 버퍼에 쌓인다.
+    워커를 하나만 두는 이유는 세그먼트 순서를 보장하기 위해서다.
+    """
+
+    def __init__(self, ws: WebSocket, ctx: Any):
+        self._ws = ws
+        self._ctx = ctx                      # server.State
+        self._cfg = ctx.config
+
+        self._session = None                 # sessions.Session
+        self._vad = None
+        self._turn = None
+        self._turn_state = TurnState()
+        self._deliver_until = 0.0            # 재생 중이라고 볼 시각 (loop.time 기준)
+
+        self._sample_rate = 0
+        self._channels = 0
+        self._options: dict[str, Any] = {}
+        self._context: dict[tuple[str, str], list[Turn]] = {}
+
+        self._queue: asyncio.Queue[_Segment] = asyncio.Queue()
+        self._seg = 0
+        self._send_lock = asyncio.Lock()
+        self._worker: asyncio.Task | None = None
+        self._current: asyncio.Task | None = None
+        self._closing = False
+
+    # ---- 송신 -------------------------------------------------------------
+
+    async def _send(self, payload: dict, audio: bytes | None = None) -> None:
+        """
+        JSON 이벤트를, 필요하면 바로 뒤에 바이너리 프레임을 붙여 보낸다.
+
+        락으로 묶는 이유는 tts.chunk 와 그 오디오 사이에 다른 이벤트가 끼면
+        클라이언트가 어느 chunk 의 오디오인지 알 수 없기 때문이다.
+        """
+        if self._ws.client_state is not WebSocketState.CONNECTED:
+            return
+        async with self._send_lock:
+            await self._ws.send_json(payload)
+            if audio is not None:
+                await self._ws.send_bytes(audio)
+
+    async def _error(self, code: str, message: str) -> None:
+        log.info("stream error [%s] %s", code, message)
+        await self._send({"type": "error", "code": code, "message": message, **self._route()})
+
+    def _route(self) -> dict:
+        """발화자 쪽 이벤트에 붙는 from/to. 세션이 아직 없으면 비어 있다."""
+        if self._session is None:
+            return {}
+        try:
+            speaker = self._speaker_id()
+            return {"from": speaker, "to": [p.id for p in self._session.listeners_of(speaker)]}
+        except Exception:
+            # 오류 이벤트를 보내려다 다시 죽으면 안 된다. 그 이유는 error 로 이미 나간다.
+            return {}
+
+    # ---- 수명 -------------------------------------------------------------
+
+    async def run(self) -> None:
+        await self._ws.accept()
+        try:
+            await self._configure()
+        except StreamError as exc:
+            await self._error(exc.code, str(exc))
+            await self._ws.close()
+            return
+
+        self._worker = asyncio.create_task(self._run_worker())
+        try:
+            await self._receive_loop()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await self._shutdown()
+
+    async def _shutdown(self) -> None:
+        self._closing = True
+        for task in (self._current, self._worker):
+            if task and not task.done():
+                task.cancel()
+        if self._worker:
+            await asyncio.gather(self._worker, return_exceptions=True)
+        if self._ws.client_state is WebSocketState.CONNECTED:
+            await self._ws.close()
+
+    # ---- 설정 -------------------------------------------------------------
+
+    async def _configure(self) -> None:
+        timeout = float(self._cfg.get("stream.config_timeout_s"))
+        try:
+            first = await asyncio.wait_for(self._ws.receive(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise StreamError(
+                "stream.config_timeout",
+                f"No config message within {timeout}s. Send "
+                f'{{"type":"config", ...}} first',
+            ) from None
+
+        if first.get("type") == "websocket.disconnect":
+            raise WebSocketDisconnect(first.get("code", 1000))
+        if "text" not in first or first["text"] is None:
+            raise StreamError(
+                "stream.config_required",
+                'The first message must be a JSON {"type":"config", ...}, not binary audio',
+            )
+
+        try:
+            msg = json.loads(first["text"])
+        except ValueError as exc:
+            raise StreamError("stream.bad_json", f"Could not parse the config message: {exc}")
+        if not isinstance(msg, dict) or msg.get("type") != "config":
+            raise StreamError(
+                "stream.config_required",
+                'The first message must have "type":"config"',
+            )
+
+        self._sample_rate = int(self._cfg.get("audio.stt_sample_rate"))
+        self._channels = int(self._cfg.get("audio.stt_channels"))
+        declared = msg.get("sample_rate")
+        if declared is not None and int(declared) != self._sample_rate:
+            # 리샘플링을 조용히 해주지 않는다. 클라이언트가 /v1/config 를 보고
+            # 맞춰 보내야 어디서 어긋났는지가 드러난다.
+            raise StreamError(
+                "stream.sample_rate",
+                f"This server expects PCM16 mono at {self._sample_rate} Hz "
+                f"(audio.stt_sample_rate), but the client declared {declared}",
+            )
+
+        source_lang = (msg.get("source_lang") or "").strip()
+        target_lang = (msg.get("target_lang") or "").strip()
+        if not source_lang or not target_lang:
+            raise StreamError(
+                "stream.language_required", "config must include source_lang and target_lang"
+            )
+
+        try:
+            self._session = self._ctx.profiles.create(
+                profile=msg.get("profile"),
+                mode=msg.get("mode"),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                participants=msg.get("participants"),
+            )
+        except (SessionError, ConfigError) as exc:
+            raise StreamError("session.invalid", str(exc)) from exc
+
+        try:
+            vad_settings = self._cfg.require_section("vad")
+            backend = self._cfg.get("vad.backend")
+            self._vad = registry.resolve(VAD_KIND, backend)(vad_settings, self._sample_rate)
+            self._turn = registry.resolve(TURN_KIND, self._session.turn_policy)(
+                self._cfg.require_section("turn")
+            )
+        except (RegistryError, VadError, ConfigError) as exc:
+            raise StreamError("stream.setup_failed", str(exc)) from exc
+
+        # 파이프라인에 그대로 넘길 값들. 없는 것은 넣지 않아야 서버 기본값이 쓰인다.
+        self._options = {
+            "speaker_hint": msg.get("speaker"),
+            "stt_engine": msg.get("stt_engine") or None,
+            "tts_engine": msg.get("tts_engine") or None,
+            "voice": msg.get("voice") or None,
+            "speed": float(
+                msg["speed"] if msg.get("speed") is not None else self._cfg.get("audio.tts_speed")
+            ),
+            "response_format": msg.get("response_format") or self._cfg.get(
+                "audio.tts_response_format"
+            ),
+            "provider": msg.get("provider") or None,
+            "model": msg.get("model") or None,
+            "style": msg.get("style") or None,
+            "glossary": msg.get("glossary") or None,
+            "with_audio": bool(msg.get("with_audio", True)),
+        }
+
+        await self._send({
+            "type": "ready",
+            "session_id": str(id(self)),
+            "participants": [p.as_dict() for p in self._session.participants],
+            "profile": self._session.profile,
+            "mode": self._session.mode,
+            "turn_policy": self._session.turn_policy,
+            "audio": {
+                "sample_rate": self._sample_rate,
+                "channels": self._channels,
+                "format": self._cfg.get("stream.input_format"),
+                "frame_ms": self._cfg.get("stream.client_frame_ms"),
+            },
+            "vad": {"backend": self._cfg.get("vad.backend")},
+            **self._route(),
+        })
+
+    def _speaker_id(self) -> str:
+        """발화자 결정. 단방향은 후보가 하나라 hint 없이 정해진다."""
+        identify = registry.resolve(SPEAKER_ID_KIND, self._session.speaker_id)
+        return identify(
+            [p.as_dict() for p in self._session.participants],
+            hint=self._options.get("speaker_hint"),
+            audio=None,
+            text=None,
+        )
+
+    # ---- 수신 -------------------------------------------------------------
+
+    async def _receive_loop(self) -> None:
+        while True:
+            message = await self._ws.receive()
+            kind = message.get("type")
+            if kind == "websocket.disconnect":
+                return
+            if message.get("bytes") is not None:
+                await self._on_audio(message["bytes"])
+            elif message.get("text") is not None:
+                await self._on_text(message["text"])
+
+    async def _on_text(self, raw: str) -> None:
+        try:
+            msg = json.loads(raw)
+        except ValueError as exc:
+            await self._error("stream.bad_json", f"Could not parse the message: {exc}")
+            return
+        if not isinstance(msg, dict):
+            await self._error("stream.bad_message", "A message must be a JSON object")
+            return
+
+        kind = msg.get("type")
+        if kind == "config":
+            await self._error(
+                "stream.already_configured",
+                "This session is already configured. Open a new connection to change it",
+            )
+            return
+        if kind != "control":
+            await self._error("stream.unknown_message", f"Unknown message type: '{kind}'")
+            return
+
+        action = msg.get("action")
+        if action == "flush":
+            await self._drain_vad(force=True)
+        elif action == "cancel":
+            await self._cancel()
+        elif action == "playback":
+            # 클라이언트가 실제 재생 상태를 알려주면 서버의 추정을 보정한다.
+            playing = msg.get("state") == "start"
+            self._turn_state.delivering = playing
+            self._deliver_until = 0.0
+        else:
+            await self._error("stream.unknown_action", f"Unknown control action: '{action}'")
+
+    async def _on_audio(self, data: bytes) -> None:
+        if self._vad is None:
+            return
+
+        self._refresh_turn_state()
+        if not self._turn.accepts_audio(self._turn_state):
+            # half_duplex — 번역 음성이 나가는 동안 들어온 것은 버린다.
+            # 스피커 소리가 마이크로 되돌아와 자기 번역을 다시 번역하는 루프를 막는다.
+            return
+
+        try:
+            events = self._vad.push(pcm16_from_bytes(data))
+        except Exception as exc:
+            await self._error("vad.failed", f"{type(exc).__name__}: {exc}")
+            return
+        await self._emit_vad(events)
+
+    async def _drain_vad(self, *, force: bool) -> None:
+        if self._vad is None:
+            return
+        events = self._vad.flush()
+        if force:
+            for e in events:
+                e.reason = "forced"
+        await self._emit_vad(events)
+
+    async def _emit_vad(self, events) -> None:
+        route = self._route()
+        for event in events:
+            await self._send({"type": "vad", **event.meta(), **route})
+            if event.state == SPEECH_START:
+                action = self._turn.on_speech_start(self._turn_state)
+                if action == STOP_OUTPUT:
+                    await self._send({"type": "tts.stop", **route})
+                    self._turn_state.delivering = False
+                    self._deliver_until = 0.0
+            elif event.state == SPEECH_END and not event.dropped and event.audio is not None:
+                self._seg += 1
+                await self._queue.put(
+                    _Segment(
+                        seg=self._seg,
+                        pcm=event.audio,
+                        speech_ms=event.speech_ms or 0,
+                        reason=event.reason or "silence",
+                    )
+                )
+
+    async def _cancel(self) -> None:
+        """진행 중인 세그먼트를 버리고 큐를 비운다. VAD 상태도 초기화한다."""
+        if self._current and not self._current.done():
+            self._current.cancel()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        if self._vad is not None:
+            self._vad.flush()
+        self._turn_state.delivering = False
+        self._deliver_until = 0.0
+        await self._send({"type": "cancelled", **self._route()})
+
+    def _refresh_turn_state(self) -> None:
+        if self._deliver_until:
+            if asyncio.get_running_loop().time() >= self._deliver_until:
+                self._deliver_until = 0.0
+                self._turn_state.delivering = False
+        self._turn_state.processing = self._current is not None and not self._current.done()
+
+    # ---- 처리 -------------------------------------------------------------
+
+    async def _run_worker(self) -> None:
+        while True:
+            segment = await self._queue.get()
+            self._current = asyncio.create_task(self._process(segment))
+            try:
+                await self._current
+            except asyncio.CancelledError:
+                if self._closing:
+                    raise
+                # cancel 액션으로 이 세그먼트만 죽인 경우. 다음 것을 계속 받는다.
+            except Exception as exc:
+                log.exception("Segment processing failed")
+                await self._error("pipeline.failed", f"{type(exc).__name__}: {exc}")
+            finally:
+                self._current = None
+                self._queue.task_done()
+
+    async def _process(self, segment: _Segment) -> None:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        wav = pcm16_to_wav(
+            segment.pcm, sample_rate=self._sample_rate, channels=self._channels
+        )
+        seg_seconds = duration_s(segment.pcm.size, self._sample_rate)
+
+        async def progress(stage: str, payload: dict) -> None:
+            await self._on_stage(stage, payload)
+
+        try:
+            result = await self._ctx.pipeline.run_audio(
+                self._session,
+                audio=wav,
+                filename=self._cfg.get("stream.segment_filename"),
+                content_type=self._cfg.get("stream.segment_content_type"),
+                seg=segment.seg,
+                context=self._context_for(),
+                progress=progress,
+                **self._options,
+            )
+        except (SessionError, SpeakerIdError) as exc:
+            await self._error("session.invalid", str(exc))
+            return
+        except (EngineError, LLMError) as exc:
+            await self._error("engine.failed", str(exc))
+            return
+        except RegistryError as exc:
+            await self._error("registry.failed", str(exc))
+            return
+
+        # 대화 맥락 축적. 한국어는 주어 생략이 많아 맥락 없이는 대명사를 틀린다.
+        limit = int(self._cfg.get("llm.context_turns"))
+        for delivery in result.deliveries:
+            if not (result.source_text and delivery.text):
+                continue
+            key = (result.speaker, delivery.to)
+            turns = self._context.setdefault(key, [])
+            turns.append(Turn(source=result.source_text, target=delivery.text))
+            if limit > 0:
+                del turns[:-limit]
+
+        metrics = dict(result.metrics)
+        metrics["segment_ms"] = round(seg_seconds * 1000)
+        metrics["vad_speech_ms"] = segment.speech_ms
+        metrics["segment_reason"] = segment.reason
+        metrics["pipeline_ms"] = round((loop.time() - started) * 1000)
+        await self._send({
+            "type": "metrics",
+            "seg": segment.seg,
+            **metrics,
+            "from": result.speaker,
+            "to": [d.to for d in result.deliveries],
+        })
+
+    def _context_for(self) -> list[Turn]:
+        """
+        LLM 에 넘길 맥락.
+
+        참여자 쌍마다 따로 쌓아두지만, 파이프라인은 세그먼트당 한 벌만 받는다.
+        단방향에서는 쌍이 하나뿐이라 그대로 맞고, 2단계에서 방향별 맥락이 필요해지면
+        파이프라인이 수신자별로 골라 쓰도록 바꾸면 된다.
+        """
+        if not self._context:
+            return []
+        return next(iter(self._context.values()))
+
+    async def _on_stage(self, stage: str, payload: dict) -> None:
+        """
+        파이프라인이 단계마다 부르는 콜백. 여기서 WS 이벤트로 바꾼다.
+
+        파이프라인을 복제하지 않고도 결과를 흘려보내기 위한 통로다.
+        2단계에서 stt.partial / llm.delta 가 생기면 같은 통로로 들어온다.
+        """
+        if stage == "stt.final":
+            await self._send({"type": "stt.final", **payload, "to": self._route().get("to", [])})
+            return
+
+        if stage == "llm.final":
+            await self._send({"type": "llm.final", **payload})
+            return
+
+        if stage == "tts.final":
+            audio = payload.pop("audio", None)
+            seq = payload.pop("seq", 0)
+            if audio:
+                await self._send({"type": "tts.chunk", "seq": seq, **payload}, audio=audio)
+                self._mark_delivering(payload.get("duration"))
+            await self._send({
+                "type": "tts.done",
+                "seg": payload.get("seg"),
+                "from": payload.get("from"),
+                "to": payload.get("to"),
+            })
+            return
+
+        # 모르는 단계는 그대로 흘려보낸다. 2단계에서 단계가 늘어도 여기를 고치지 않게.
+        await self._send({"type": stage, **payload})
+
+    def _mark_delivering(self, duration: float | None) -> None:
+        """
+        서버는 스피커를 볼 수 없으므로 보낸 오디오 길이로 재생 구간을 추정한다.
+        클라이언트가 control/playback 을 보내주면 그 값이 이 추정을 덮는다.
+        """
+        if not duration:
+            return
+        grace = float(self._cfg.get("turn.playback_grace_s"))
+        self._turn_state.delivering = True
+        self._deliver_until = asyncio.get_running_loop().time() + float(duration) + grace

@@ -27,6 +27,7 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -36,6 +37,8 @@ from . import registry
 from .adapters.llm._base import LLMError
 from .adapters.routing.policies import ROUTING_KIND
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
+from .adapters.turn.policies import TURN_KIND
+from .adapters.vad._base import VAD_KIND
 from .config import Config, ConfigError
 from .engines import EngineError, EngineRegistry
 from .i18n import localize
@@ -44,6 +47,7 @@ from .llm import LLM_KIND, ProviderRegistry, Translator, Turn
 from .pipeline import Pipeline
 from .registry import RegistryError
 from .sessions import ProfileRegistry, SessionError
+from .streaming import StreamHandler
 
 log = logging.getLogger("orchestrator")
 
@@ -204,7 +208,30 @@ def create_app() -> FastAPI:
             },
             "audio": {
                 "stt_sample_rate": c.get("audio.stt_sample_rate"),
+                "stt_channels": c.get("audio.stt_channels"),
                 "tts_response_format": c.get("audio.tts_response_format"),
+            },
+            # WebSocket 스트리밍. 클라이언트는 이 값들로 마이크 캡처 규격을 맞춘다.
+            "stream": {
+                "path": c.get("stream.path"),
+                "input_format": c.get("stream.input_format"),
+                "client_frame_ms": c.get("stream.client_frame_ms"),
+            },
+            "vad": {
+                "backend": c.get("vad.backend"),
+                "available": registry.available(VAD_KIND),
+                "silence_ms": c.get("vad.silence_ms"),
+                "min_speech_ms": c.get("vad.min_speech_ms"),
+            },
+            "turn": {
+                "default_policy": c.get("session.default_turn_policy"),
+                "available": registry.available(TURN_KIND),
+            },
+            # 클라이언트 입력 방식(누르고 말하기 / 핸즈프리)의 목록과 기본값.
+            # 목록을 클라이언트에 하드코딩하지 않기 위해 여기서 내보낸다.
+            "client": {
+                "input_modes": c.get("client.input_modes"),
+                "default_input_mode": c.get("client.default_input_mode"),
             },
         }
 
@@ -349,6 +376,26 @@ def create_app() -> FastAPI:
         except LLMError as exc:
             raise HTTPException(502, str(exc)) from exc
 
+    # ---- 실시간 스트림 ------------------------------------------------------
+    #
+    # 경로도 설정에서 온다. 데코레이터가 기동 시점에 한 번 평가되므로
+    # 경로를 바꾸려면 재기동이 필요하다 — 그 점만 다른 설정과 다르다.
+    @app.websocket(cfg.get("stream.path"))
+    async def stream(ws: WebSocket) -> None:
+        """
+        Audio in (PCM16 binary frames), translated audio + text out.
+
+        Server-side VAD cuts the stream into segments, so the client does not
+        have to decide when an utterance ended. See DESIGN.md for the protocol.
+        """
+        if not _ws_authorized(state, ws):
+            # 정책상 accept 전에 거절한다. 핸드셰이크 단계에서 끊어야
+            # 브라우저가 "인증 실패"를 열린 연결의 오류로 착각하지 않는다.
+            await ws.close(code=int(state.config.get("stream.unauthorized_close_code")))
+            return
+        state.reload_if_changed()
+        await StreamHandler(ws, state).run()
+
     @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:
         state.config.reload()
@@ -392,6 +439,36 @@ class TextTranslateRequest(BaseModel):
     stream: bool = False
 
 
+def _token_of(headers, query, param: str) -> str:
+    """HTTP 와 WS 가 같은 방식으로 키를 찾는다. 규칙이 갈리지 않게 한 곳에 둔다."""
+    header = headers.get("authorization", "")
+    token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+    if not token:
+        token = headers.get("x-api-key", "").strip()
+    # 쿼리 파라미터는 기본적으로 꺼져 있다(설정의 빈 문자열). URL 은 접근 로그와
+    # Referer 에 남으므로 헤더를 붙일 수 있는 경로에서는 쓰지 않는 편이 낫다.
+    if not token and param and query is not None:
+        token = (query.get(param) or "").strip()
+    return token
+
+
+def _ws_authorized(state: State, ws: WebSocket) -> bool:
+    """
+    WebSocket 인증. HTTP 와 같은 `auth.api_key` 다.
+
+    브라우저는 WS 핸드셰이크에 헤더를 붙일 수 없지만, 웹 클라이언트는 nginx 를
+    거치고 그 nginx 가 Authorization 을 주입하므로 키가 브라우저에 내려가지 않는다.
+    프록시 없이 직접 붙는 클라이언트(CLI·앱)는 헤더를 그대로 붙이면 된다.
+    """
+    cfg = state.config
+    key = (cfg.get("auth.api_key") or "").strip()
+    if not key:
+        return True
+    if ws.url.path in cfg.get("auth.public_paths"):
+        return True
+    return _token_of(ws.headers, ws.query_params, cfg.get("auth.ws_query_param")) == key
+
+
 def _auth_dependency(state: State):
     async def check(request: Request) -> None:
         cfg = state.config
@@ -400,11 +477,8 @@ def _auth_dependency(state: State):
             return
         if request.url.path in cfg.get("auth.public_paths"):
             return
-        header = request.headers.get("authorization", "")
-        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
-        if not token:
-            token = request.headers.get("x-api-key", "").strip()
-        if token != key:
+        # HTTP 는 헤더만 본다. 쿼리 파라미터 대안은 WS 전용이다.
+        if _token_of(request.headers, None, "") != key:
             raise HTTPException(401, "Invalid API key")
 
     return check

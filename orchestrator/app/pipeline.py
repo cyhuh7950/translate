@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from . import registry
 from .adapters.routing.policies import ROUTING_KIND
@@ -30,6 +30,12 @@ log = logging.getLogger("pipeline")
 
 STT_KIND = "stt"
 TTS_KIND = "tts"
+
+# 단계가 끝날 때마다 부르는 콜백. WS 스트림이 결과를 기다리지 않고 흘려보내는 통로다.
+#   progress(stage, payload)  stage = "stt.final" | "llm.final" | "tts.final"
+# HTTP 경로는 넘기지 않으므로 동작이 그대로다. 2단계에서 stt.partial / llm.delta 가
+# 생기면 같은 통로에 stage 를 하나 더 얹는다 — 호출자는 고치지 않는다.
+Progress = Callable[[str, dict], Awaitable[None]]
 
 
 class PipelineError(Exception):
@@ -158,10 +164,15 @@ class Pipeline:
         context: list[Turn] | None = None,
         glossary: dict[str, str] | None = None,
         with_audio: bool = True,
+        progress: Progress | None = None,
     ) -> SegmentResult:
         loop = asyncio.get_running_loop()
         started = loop.time()
         metrics: dict[str, Any] = {}
+
+        async def emit(stage: str, payload: dict) -> None:
+            if progress is not None:
+                await progress(stage, payload)
 
         # 1) 발화자 결정. 단방향이면 후보가 하나라 hint 없이도 정해진다.
         identify = registry.resolve(SPEAKER_ID_KIND, session.speaker_id)
@@ -186,6 +197,13 @@ class Pipeline:
             metrics=metrics,
             engines={"stt": stt.id},
         )
+        await emit("stt.final", {
+            "seg": seg,
+            "from": speaker_id,
+            "lang": result.source_lang,
+            "text": source_text,
+        })
+
         if not source_text:
             # 무음이거나 인식 실패. 오류가 아니라 빈 결과다.
             metrics["skipped"] = "no text recognized"
@@ -214,6 +232,13 @@ class Pipeline:
             metrics[f"llm_ms.{listener.id}"] = round((loop.time() - t0) * 1000)
 
             delivery = Delivery(to=listener.id, lang=listener.lang, text=translated)
+            await emit("llm.final", {
+                "seg": seg,
+                "from": speaker_id,
+                "to": listener.id,
+                "lang": listener.lang,
+                "text": translated,
+            })
 
             # 4) TTS — 수신자의 언어로 합성
             if with_audio and tts is not None and translated:
@@ -233,6 +258,18 @@ class Pipeline:
                 delivery.duration = spoken["duration"]
 
             result.deliveries.append(delivery)
+            # 지금은 세그먼트 하나에 청크가 하나다(배치 TTS). 2단계에서 스트리밍 TTS 가
+            # 붙으면 같은 stage 를 seq 를 올려가며 여러 번 부른다 — 계약은 그대로다.
+            await emit("tts.final", {
+                "seg": seg,
+                "from": speaker_id,
+                "to": listener.id,
+                "seq": 0,
+                "sr": delivery.sample_rate,
+                "content_type": delivery.content_type,
+                "duration": delivery.duration,
+                "audio": delivery.audio,
+            })
 
         metrics["total_ms"] = round((loop.time() - started) * 1000)
         return result
