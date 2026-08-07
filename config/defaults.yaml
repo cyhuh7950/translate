@@ -59,7 +59,7 @@ engine_health:
 
 llm:
   # providers.yaml 의 키 중 하나
-  default_provider: ""
+  default_provider: groq
   # 번역 스타일 — prompts 에서 참조한다
   style: natural
   # 대화 맥락으로 넘길 최근 턴 수

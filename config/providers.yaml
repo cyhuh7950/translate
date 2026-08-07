@@ -12,7 +12,7 @@ providers:
     kind: openai_compatible
     base_url: https://api.cerebras.ai/v1
     api_key_env: LLM_KEY_CEREBRAS
-    default_model: ""
+    default_model: zai-glm-4.7   # CJK 번역 품질이 좋다
     # 첫 토큰이 매우 빠르다 — 실시간 모드에 유리
     fast: true
 
@@ -21,7 +21,7 @@ providers:
     kind: openai_compatible
     base_url: https://api.groq.com/openai/v1
     api_key_env: LLM_KEY_GROQ
-    default_model: ""
+    default_model: llama-3.3-70b-versatile   # 빠르면서 품질이 무난. 더 빠른 것은 llama-3.1-8b-instant
     fast: true
 
   mistral:
@@ -43,7 +43,7 @@ providers:
     kind: openai_compatible
     base_url: https://api.upstage.ai/v1
     api_key_env: LLM_KEY_UPSTAGE
-    default_model: ""
+    default_model: solar-pro4   # 한국어 특화(Upstage). 경량은 solar-mini
 
   openai:
     label: "OpenAI"

@@ -17,13 +17,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from . import registry
+from .adapters.llm._base import LLMError
 from .adapters.routing.policies import ROUTING_KIND
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND
 from .config import Config, ConfigError
 from .engines import EngineRegistry
+from .llm import LLM_KIND, ProviderRegistry, Translator, Turn
 from .sessions import ProfileRegistry
 
 log = logging.getLogger("orchestrator")
@@ -42,12 +45,15 @@ class State:
         self.config = Config(config_dir)
         self.engines = EngineRegistry(self.config)
         self.profiles = ProfileRegistry(self.config)
+        self.providers = ProviderRegistry(self.config)
+        self.translator = Translator(self.config, self.providers)
 
     def reload_if_changed(self) -> bool:
         if not self.config.maybe_reload():
             return False
         self.engines.load()
         self.profiles.load()
+        self.providers.invalidate()   # base_url·모델이 바뀌었을 수 있다
         return True
 
 
@@ -135,9 +141,9 @@ def create_app() -> FastAPI:
             "llm": {
                 "default_provider": c.get("llm.default_provider"),
                 "style": c.get("llm.style"),
-                "styles": sorted(c.require_section("prompts.styles").keys())
-                if c.get_optional("prompts.styles") else [],
-                "providers": _providers_view(c),
+                "styles": sorted(c.require_section("prompts.styles").keys()),
+                "context_turns": c.get("llm.context_turns"),
+                "providers": state.providers.public_view(),
             },
             # 등록된 구현체 — 무엇이 실제로 붙어 있는지 그대로 보여준다
             "implementations": registry.snapshot(),
@@ -150,6 +156,50 @@ def create_app() -> FastAPI:
                 "tts_response_format": c.get("audio.tts_response_format"),
             },
         }
+
+    @app.get("/v1/models", summary="프로바이더가 실제로 제공하는 모델 목록", dependencies=[auth])
+    async def list_models(provider: str | None = None) -> dict:
+        """모델 이름을 코드나 클라이언트에 박지 않고 프로바이더에 직접 물어본다."""
+        pid = provider or state.config.get("llm.default_provider")
+        try:
+            return {"provider": pid, "models": await state.providers.models(pid)}
+        except LLMError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/v1/translate/text", summary="텍스트 번역 (STT/TTS 없이)", dependencies=[auth])
+    async def translate_text(req: TextTranslateRequest):
+        """LLM 계층만 따로 확인할 때 쓴다. 음성 파이프라인은 이걸 내부적으로 재사용한다."""
+        state.reload_if_changed()
+        context = [Turn(source=t.source, target=t.target) for t in (req.context or [])]
+        kwargs = dict(
+            source_lang=req.source_lang,
+            target_lang=req.target_lang,
+            provider=req.provider,
+            model=req.model,
+            style=req.style,
+            context=context,
+            glossary=req.glossary,
+        )
+        try:
+            if req.stream:
+                async def gen():
+                    async for piece in state.translator.stream(req.text, **kwargs):
+                        yield piece
+                return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+            started = asyncio.get_running_loop().time()
+            text = await state.translator.translate(req.text, **kwargs)
+            elapsed = asyncio.get_running_loop().time() - started
+            return {
+                "text": text,
+                "source_lang": req.source_lang,
+                "target_lang": req.target_lang,
+                "provider": req.provider or state.config.get("llm.default_provider"),
+                "model": req.model,
+                "elapsed_s": round(elapsed, 3),
+            }
+        except LLMError as exc:
+            raise HTTPException(502, str(exc)) from exc
 
     @app.post("/v1/admin/reload", summary="설정 다시 읽기", dependencies=[auth])
     async def reload_config() -> dict:
@@ -170,32 +220,23 @@ def create_app() -> FastAPI:
     return app
 
 
-def _providers_view(cfg: Config) -> list[dict]:
-    """키가 없는 프로바이더는 사용 불가로 표시한다. 키 값 자체는 절대 내보내지 않는다."""
-    out = []
-    for name, spec in cfg.require_section("providers").items():
-        kind = spec.get("kind", "")
-        needs_key = spec.get("requires_key", True)
-        has_key = bool(os.environ.get(spec.get("api_key_env", ""), "").strip())
-        registered = registry.has("llm", kind)
+class ContextTurn(BaseModel):
+    source: str
+    target: str
 
-        if not registered:
-            reason = f"어댑터 계열 '{kind}' 이 등록돼 있지 않습니다"
-        elif needs_key and not has_key:
-            reason = f"API 키가 없습니다 ({spec.get('api_key_env')})"
-        else:
-            reason = None
 
-        out.append({
-            "id": name,
-            "label": spec.get("label", name),
-            "kind": kind,
-            "default_model": spec.get("default_model") or None,
-            "fast": bool(spec.get("fast", False)),
-            "available": reason is None,
-            "reason": reason,
-        })
-    return out
+class TextTranslateRequest(BaseModel):
+    """번역 방향은 요청이 정한다. 코드에 언어쌍 상수가 없다."""
+
+    text: str = Field(..., description="번역할 원문")
+    source_lang: str = Field(..., description="원문 언어 (예: ko)")
+    target_lang: str = Field(..., description="번역 언어 (예: en)")
+    provider: str | None = Field(None, description="생략 시 llm.default_provider")
+    model: str | None = Field(None, description="생략 시 프로바이더의 default_model")
+    style: str | None = Field(None, description="prompts.styles 의 키")
+    context: list[ContextTurn] | None = Field(None, description="직전 대화 턴들")
+    glossary: dict[str, str] | None = Field(None, description="용어집 (원어 → 번역어)")
+    stream: bool = False
 
 
 def _auth_dependency(state: State):
