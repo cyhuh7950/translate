@@ -37,7 +37,7 @@ class BaseLLM:
         self.settings = settings          # llm.* 설정 (temperature, timeout 등)
         self.base_url = (spec.get("base_url") or "").rstrip("/")
         if not self.base_url:
-            raise LLMError(f"프로바이더 '{provider_id}' 에 base_url 이 없습니다")
+            raise LLMError(f"Provider '{provider_id}' has no base_url")
 
     # ---- 공통 도우미 -------------------------------------------------------
 
@@ -50,8 +50,8 @@ class BaseLLM:
         model = (requested or self.spec.get("default_model") or "").strip()
         if not model:
             raise LLMError(
-                f"프로바이더 '{self.id}' 의 모델이 지정되지 않았습니다. "
-                f"요청에 model 을 주거나 providers.yaml 의 default_model 을 채우세요"
+                f"No model specified for provider '{self.id}'. "
+                f"Pass model in the request or set default_model in providers.yaml"
             )
         return model
 
@@ -63,7 +63,7 @@ class BaseLLM:
         if r.status_code < 400:
             return
         body = r.text[:400] if r.content else ""
-        raise LLMError(f"{self.id} 응답 오류 {r.status_code}: {body}")
+        raise LLMError(f"{self.id} response error {r.status_code}: {body}")
 
     @staticmethod
     async def _iter_sse(r: httpx.Response) -> AsyncIterator[dict]:

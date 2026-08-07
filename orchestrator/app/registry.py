@@ -49,11 +49,11 @@ def register(kind: str, name: str) -> Callable[[T], T]:
     def decorator(obj: T) -> T:
         if key in _REGISTRY and _REGISTRY[key] is not obj:
             raise RegistryError(
-                f"이미 등록된 구현입니다: {kind}/{name} "
-                f"({_REGISTRY[key]!r} vs {obj!r}). 이름을 다르게 주세요"
+                f"Implementation already registered: {kind}/{name} "
+                f"({_REGISTRY[key]!r} vs {obj!r}). Use a different name"
             )
         _REGISTRY[key] = obj
-        log.debug("등록: %s/%s → %s", kind, name, getattr(obj, "__name__", obj))
+        log.debug("Registered: %s/%s → %s", kind, name, getattr(obj, "__name__", obj))
         return obj
 
     return decorator
@@ -62,13 +62,13 @@ def register(kind: str, name: str) -> Callable[[T], T]:
 def resolve(kind: str, name: str) -> Any:
     """이름으로 구현체를 찾는다. 없으면 무엇이 있는지 알려주며 죽는다."""
     if not name:
-        raise RegistryError(f"{kind} 구현 이름이 비어 있습니다. 설정을 확인하세요")
+        raise RegistryError(f"{kind} implementation name is empty. Check your config")
     try:
         return _REGISTRY[(kind, name)]
     except KeyError:
         raise RegistryError(
-            f"등록되지 않은 {kind} 구현입니다: '{name}'. "
-            f"사용 가능: {', '.join(available(kind)) or '(없음)'}"
+            f"Unregistered {kind} implementation: '{name}'. "
+            f"Available: {', '.join(available(kind)) or '(none)'}"
         ) from None
 
 
@@ -102,7 +102,7 @@ def discover(package: str) -> int:
     try:
         pkg = importlib.import_module(package)
     except ModuleNotFoundError as exc:
-        raise RegistryError(f"탐색할 패키지를 찾을 수 없습니다: {package} ({exc})") from exc
+        raise RegistryError(f"Package to discover not found: {package} ({exc})") from exc
 
     loaded = 0
     for mod in pkgutil.walk_packages(pkg.__path__, prefix=f"{package}."):
@@ -112,10 +112,10 @@ def discover(package: str) -> int:
             importlib.import_module(mod.name)
             loaded += 1
         except Exception as exc:  # 어댑터 하나가 깨져도 나머지는 살린다
-            log.error("어댑터 로드 실패 %s: %s", mod.name, exc)
+            log.error("Failed to load adapter %s: %s", mod.name, exc)
 
     _DISCOVERED.add(package)
-    log.info("%s 탐색 완료 — 모듈 %d개, 등록 %s", package, loaded, snapshot())
+    log.info("%s discovery complete — %d modules, registered %s", package, loaded, snapshot())
     return loaded
 
 

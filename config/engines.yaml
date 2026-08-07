@@ -14,6 +14,8 @@ engines:
   # ── 오라클 서버 (ARM64 CPU) ─────────────────────────────────────────
   - id: whisper
     kind: stt
+    # API 방언. 다른 규격의 엔진이 생기면 어댑터를 추가하고 여기서 지정한다.
+    adapter: openai_audio
     server: oracle
     # RTF 1.12 (base/int8, ARM 4코어) — 발화보다 느려 실시간 불가
     modes: [batch, ptt]
@@ -29,6 +31,8 @@ engines:
 
   - id: moonshine
     kind: stt
+    # API 방언. 다른 규격의 엔진이 생기면 어댑터를 추가하고 여기서 지정한다.
+    adapter: openai_audio
     server: oracle
     # RTF 0.05~0.18 로 매우 빠르지만 한국어(tiny-ko)는 문장 끝을 자주 놓친다.
     modes: [batch, ptt]
@@ -44,6 +48,8 @@ engines:
 
   - id: supertonic
     kind: tts
+    # API 방언. 다른 규격의 엔진이 생기면 어댑터를 추가하고 여기서 지정한다.
+    adapter: openai_audio
     server: oracle
     # RTF 1.93. 31개 언어, 보이스 10종(M1~M5 / F1~F5)
     modes: [batch, ptt]
@@ -59,6 +65,8 @@ engines:
 
   - id: melotts
     kind: tts
+    # API 방언. 다른 규격의 엔진이 생기면 어댑터를 추가하고 여기서 지정한다.
+    adapter: openai_audio
     server: oracle
     # RTF 4.8 — 느리다. 품질 비교용.
     modes: [batch]

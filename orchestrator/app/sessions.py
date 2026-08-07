@@ -18,8 +18,11 @@ from typing import Any
 from . import registry
 from .adapters.speaker_id.manual import SPEAKER_ID_KIND
 from .config import Config, ConfigError
+from .i18n import localize
 
-_VAR = re.compile(r"\$\{([a-z_]+)\}")
+# 프로필 자리표시자는 {{name}} 이다. config.py 의 환경변수 치환(${VAR})과 겹치지 않게
+# 일부러 다른 문법을 쓴다 — 겹치면 환경변수 치환이 먼저 빈 문자열로 지워버린다.
+_VAR = re.compile(r"\{\{([a-z_]+)\}\}")
 
 
 class SessionError(Exception):
@@ -49,7 +52,7 @@ class Session:
         for p in self.participants:
             if p.id == pid:
                 return p
-        raise SessionError(f"없는 참여자입니다: '{pid}'")
+        raise SessionError(f"Unknown participant: '{pid}'")
 
     def speakers(self) -> list[Participant]:
         return [p for p in self.participants if p.input]
@@ -58,7 +61,9 @@ class Session:
         """발화자의 output 목록. 여기서 번역 방향이 결정된다."""
         speaker = self.by_id(speaker_id)
         if not speaker.output:
-            raise SessionError(f"참여자 '{speaker_id}' 의 output 이 비어 있어 보낼 곳이 없습니다")
+            raise SessionError(
+                f"Participant '{speaker_id}' has an empty output, so there is nowhere to deliver to"
+            )
         return [self.by_id(pid) for pid in speaker.output]
 
     def as_dict(self) -> dict:
@@ -72,12 +77,15 @@ class Session:
 
 
 def _substitute(value: Any, vars_: dict[str, str]) -> Any:
-    """프로필의 ${source_lang} 등을 세션이 넘긴 값으로 치환한다."""
+    """프로필의 {{source_lang}} 등을 세션이 넘긴 값으로 치환한다."""
     if isinstance(value, str):
         def repl(m: re.Match) -> str:
             key = m.group(1)
             if key not in vars_:
-                raise SessionError(f"프로필이 요구하는 값이 없습니다: {key}")
+                raise SessionError(
+                    f"Profile requires a value that was not provided: '{key}'. "
+                    f"Available: {', '.join(sorted(vars_)) or '(none)'}"
+                )
             return vars_[key]
         return _VAR.sub(repl, value)
     if isinstance(value, dict):
@@ -99,9 +107,9 @@ class ProfileRegistry:
         raw = self._cfg.require_section("profiles")
         for name, spec in raw.items():
             if not spec.get("participants"):
-                raise ConfigError(f"프로필 '{name}' 에 participants 가 없습니다")
+                raise ConfigError(f"Profile '{name}' has no participants")
             if not spec.get("speaker_id"):
-                raise ConfigError(f"프로필 '{name}' 에 speaker_id 가 없습니다")
+                raise ConfigError(f"Profile '{name}' has no speaker_id")
         self._profiles = dict(raw)
 
     def names(self) -> list[str]:
@@ -116,23 +124,24 @@ class ProfileRegistry:
         """
         spec = self._profiles.get(name)
         if spec is None:
-            return f"없는 프로필입니다: {name}"
+            return f"Unknown profile: {name}"
         sid = spec["speaker_id"]
         if not registry.has(SPEAKER_ID_KIND, sid):
             return (
-                f"화자 식별 구현 '{sid}' 이 등록돼 있지 않습니다 "
-                f"(사용 가능: {', '.join(registry.available(SPEAKER_ID_KIND)) or '없음'})"
+                f"Speaker identification implementation '{sid}' is not registered "
+                f"(available: {', '.join(registry.available(SPEAKER_ID_KIND)) or 'none'})"
             )
         return None
 
-    def public_view(self) -> list[dict]:
+    def public_view(self, locale: str | None = None) -> list[dict]:
+        # label/description 은 설정에서 로케일 맵일 수 있다. 여기서 표시 언어로 푼다.
         out = []
         for name, spec in self._profiles.items():
             reason = self.unavailable_reason(name)
             out.append({
                 "id": name,
-                "label": spec.get("label", name),
-                "description": spec.get("description"),
+                "label": localize(spec.get("label", name), locale),
+                "description": localize(spec.get("description"), locale),
                 "speaker_id": spec["speaker_id"],
                 "turn_policy": spec.get("turn_policy"),
                 "participant_count": len(spec["participants"]),
@@ -166,7 +175,7 @@ class ProfileRegistry:
             profile_name = profile or self._cfg.get("session.default_profile")
             reason = self.unavailable_reason(profile_name)
             if reason:
-                raise SessionError(f"프로필 '{profile_name}' 을 쓸 수 없습니다 — {reason}")
+                raise SessionError(f"Profile '{profile_name}' is not usable — {reason}")
             spec = self._profiles[profile_name]
 
         resolved = _substitute(
@@ -182,7 +191,7 @@ class ProfileRegistry:
             for p in resolved
         ]
         if not any(p.input for p in parts):
-            raise SessionError("입력을 받는 참여자가 하나도 없습니다")
+            raise SessionError("No participant accepts input")
 
         return Session(
             profile=profile_name,

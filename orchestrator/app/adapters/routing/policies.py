@@ -24,14 +24,14 @@ def _check(engine: Engine, mode: str) -> Engine:
     """지정된 엔진이 요청 모드를 지원하는지. 조용히 다른 모드로 격하시키지 않는다."""
     if not engine.supports(mode):
         raise EngineError(
-            f"엔진 '{engine.id}' 는 '{mode}' 모드를 지원하지 않습니다 "
-            f"(지원: {', '.join(engine.modes)}). "
-            f"engines.yaml 의 modes 를 확인하거나 다른 엔진을 고르세요"
+            f"Engine '{engine.id}' does not support '{mode}' mode "
+            f"(supported: {', '.join(engine.modes)}). "
+            f"Check modes in engines.yaml or pick another engine"
         )
     if not engine.available:
-        raise EngineError(f"엔진 '{engine.id}' 에 연결할 수 없습니다: {engine.last_error}")
+        raise EngineError(f"Cannot reach engine '{engine.id}': {engine.last_error}")
     if not engine.ready:
-        raise EngineError(f"엔진 '{engine.id}' 가 아직 준비되지 않았습니다: {engine.last_error}")
+        raise EngineError(f"Engine '{engine.id}' is not ready yet: {engine.last_error}")
     return engine
 
 
@@ -41,8 +41,8 @@ def _candidates(engines: EngineRegistry, kind: str, mode: str) -> list[Engine]:
 
 def _no_candidate(kind: str, mode: str) -> EngineError:
     return EngineError(
-        f"'{mode}' 모드를 지원하면서 지금 사용 가능한 {kind} 엔진이 없습니다. "
-        f"엔진이 떠 있는지, engines.yaml 의 modes 에 '{mode}' 가 있는지 확인하세요"
+        f"No {kind} engine is currently available that supports '{mode}' mode. "
+        f"Check that the engine is up and that '{mode}' is listed in modes in engines.yaml"
     )
 
 
@@ -51,7 +51,7 @@ def explicit(engines: EngineRegistry, *, kind: str, mode: str, requested: str | 
     """세션이 지정한 것만 쓴다. 지정이 없으면 오류."""
     if not requested:
         raise EngineError(
-            f"routing.policy 가 'explicit' 이므로 {kind} 엔진을 세션에서 지정해야 합니다"
+            f"routing.policy is 'explicit', so the session must specify the {kind} engine"
         )
     return _check(engines.get(requested), mode)
 

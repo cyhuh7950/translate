@@ -11,11 +11,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -23,11 +35,14 @@ from pydantic import BaseModel, Field
 from . import registry
 from .adapters.llm._base import LLMError
 from .adapters.routing.policies import ROUTING_KIND
-from .adapters.speaker_id.manual import SPEAKER_ID_KIND
+from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
 from .config import Config, ConfigError
-from .engines import EngineRegistry
+from .engines import EngineError, EngineRegistry
+from .i18n import normalize as normalize_locale
 from .llm import LLM_KIND, ProviderRegistry, Translator, Turn
-from .sessions import ProfileRegistry
+from .pipeline import Pipeline
+from .registry import RegistryError
+from .sessions import ProfileRegistry, SessionError
 
 log = logging.getLogger("orchestrator")
 
@@ -47,6 +62,7 @@ class State:
         self.profiles = ProfileRegistry(self.config)
         self.providers = ProviderRegistry(self.config)
         self.translator = Translator(self.config, self.providers)
+        self.pipeline = Pipeline(self.config, self.engines, self.translator)
 
     def reload_if_changed(self) -> bool:
         if not self.config.maybe_reload():
@@ -61,8 +77,8 @@ def _config_dir() -> str:
     path = os.environ.get(CONFIG_DIR_ENV, "").strip()
     if not path:
         raise ConfigError(
-            f"{CONFIG_DIR_ENV} 환경변수가 필요합니다. "
-            f"설정 디렉터리 경로를 지정하세요 (예: /config)"
+            f"The {CONFIG_DIR_ENV} environment variable is required. "
+            f"Set it to the config directory path (e.g. /config)"
         )
     return path
 
@@ -93,7 +109,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="translate orchestrator",
         version="0.1.0",
-        description="STT → LLM → TTS 음성 번역 오케스트레이터",
+        description="STT → LLM → TTS speech translation orchestrator",
         lifespan=lifespan,
     )
     app.state.ctx = state
@@ -109,7 +125,7 @@ def create_app() -> FastAPI:
 
     # ---- 상태 -------------------------------------------------------------
 
-    @app.get("/health", summary="헬스체크 (인증 불필요)")
+    @app.get("/health", summary="Health check (no authentication required)")
     async def health() -> JSONResponse:
         engines = state.engines.snapshot()
         return JSONResponse({
@@ -123,12 +139,25 @@ def create_app() -> FastAPI:
 
     # ---- 클라이언트가 UI 를 그리는 근거 ------------------------------------
 
-    @app.get("/v1/config", summary="지금 사용 가능한 것들", dependencies=[auth])
-    async def config_view() -> dict:
+    @app.get("/v1/config", summary="What is available right now", dependencies=[auth])
+    async def config_view(
+        request: Request,
+        locale: str | None = Query(
+            None, description="Display language (e.g. en, ko). Falls back to Accept-Language, then en"
+        ),
+    ) -> dict:
+        """
+        Everything the client needs to render its UI: profiles, engines, providers
+        and registered implementations. Human-readable labels are returned in the
+        resolved display language.
+        """
         state.reload_if_changed()
         c = state.config
+        # 표시 언어 우선순위: ?locale= > Accept-Language > 기본어(en)
+        want_locale = normalize_locale(locale or request.headers.get("accept-language"))
         return {
             "server_id": c.get("server.id"),
+            "locale": want_locale,
             "session": {
                 "default_profile": c.get("session.default_profile"),
                 "default_mode": c.get("session.default_mode"),
@@ -136,7 +165,7 @@ def create_app() -> FastAPI:
                 "allow_mode_override": c.get("session.allow_mode_override"),
             },
             # 단방향/양방향 선택지. 이름도 label 도 설정 파일에서 온다.
-            "profiles": state.profiles.public_view(),
+            "profiles": state.profiles.public_view(want_locale),
             "engines": state.engines.snapshot(),
             "llm": {
                 "default_provider": c.get("llm.default_provider"),
@@ -157,18 +186,115 @@ def create_app() -> FastAPI:
             },
         }
 
-    @app.get("/v1/models", summary="프로바이더가 실제로 제공하는 모델 목록", dependencies=[auth])
+    @app.post(
+        "/v1/translate/audio",
+        summary="Speech → translated speech (batch/PTT)",
+        dependencies=[auth],
+    )
+    async def translate_audio(
+        file: UploadFile = File(..., description="Audio file (wav/mp3/webm/m4a, etc.)"),
+        source_lang: str = Form(...),
+        target_lang: str = Form(...),
+        profile: str | None = Form(None, description="Session profile. Defaults if omitted"),
+        mode: str | None = Form(None),
+        speaker: str | None = Form(None, description="Participant id of the speaker"),
+        stt_engine: str | None = Form(None),
+        tts_engine: str | None = Form(None),
+        voice: str | None = Form(None),
+        speed: float | None = Form(None),
+        response_format: str | None = Form(None),
+        provider: str | None = Form(None),
+        model: str | None = Form(None),
+        style: str | None = Form(None),
+        with_audio: bool = Form(True, description="If False, text only (TTS skipped)"),
+        response_mode: str | None = Form(None, description="json | binary"),
+    ):
+        state.reload_if_changed()
+        c = state.config
+
+        try:
+            session = state.profiles.create(
+                profile=profile, mode=mode, source_lang=source_lang, target_lang=target_lang
+            )
+        except SessionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        audio = await file.read()
+        if not audio:
+            raise HTTPException(400, "Empty audio")
+        limit = int(c.get("server.max_upload_bytes"))
+        if len(audio) > limit:
+            raise HTTPException(413, f"Audio is too large ({len(audio)} > {limit} bytes)")
+
+        try:
+            result = await state.pipeline.run_audio(
+                session,
+                audio=audio,
+                filename=file.filename or "audio.wav",
+                content_type=file.content_type or "application/octet-stream",
+                speaker_hint=speaker,
+                stt_engine=stt_engine,
+                tts_engine=tts_engine,
+                voice=voice,
+                speed=float(speed if speed is not None else c.get("audio.tts_speed")),
+                response_format=response_format or c.get("audio.tts_response_format"),
+                provider=provider,
+                model=model,
+                style=style,
+                with_audio=with_audio,
+            )
+        except (SessionError, SpeakerIdError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except (EngineError, LLMError) as exc:
+            raise HTTPException(502, str(exc)) from exc
+        except RegistryError as exc:
+            raise HTTPException(500, str(exc)) from exc
+
+        wants = response_mode or c.get("audio.response_mode")
+        audible = [d for d in result.deliveries if d.audio]
+
+        # 수신자가 하나뿐이고 오디오가 있으면 바이트를 그대로 돌려줄 수 있다.
+        if wants == "binary" and len(audible) == 1:
+            d = audible[0]
+            return Response(
+                content=d.audio,
+                media_type=d.content_type or "application/octet-stream",
+                headers={
+                    "X-Segment": str(result.seg),
+                    "X-From": result.speaker,
+                    "X-To": d.to,
+                    "X-Source-Text": quote(result.source_text),
+                    "X-Target-Text": quote(d.text),
+                    "X-Total-Ms": str(result.metrics.get("total_ms", "")),
+                },
+            )
+
+        body = result.meta()
+        for meta, delivery in zip(body["deliveries"], result.deliveries):
+            if delivery.audio:
+                meta["audio_base64"] = base64.b64encode(delivery.audio).decode("ascii")
+        return JSONResponse(body)
+
+    @app.get(
+        "/v1/models",
+        summary="Models the provider actually offers",
+        dependencies=[auth],
+    )
     async def list_models(provider: str | None = None) -> dict:
-        """모델 이름을 코드나 클라이언트에 박지 않고 프로바이더에 직접 물어본다."""
+        """Asks the provider directly instead of hardcoding model names in the code or client."""
         pid = provider or state.config.get("llm.default_provider")
         try:
             return {"provider": pid, "models": await state.providers.models(pid)}
         except LLMError as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    @app.post("/v1/translate/text", summary="텍스트 번역 (STT/TTS 없이)", dependencies=[auth])
+    @app.post(
+        "/v1/translate/text",
+        summary="Text translation (without STT/TTS)",
+        dependencies=[auth],
+    )
     async def translate_text(req: TextTranslateRequest):
-        """LLM 계층만 따로 확인할 때 쓴다. 음성 파이프라인은 이걸 내부적으로 재사용한다."""
+        """Use this to exercise the LLM layer alone. The speech pipeline reuses it internally."""
         state.reload_if_changed()
         context = [Turn(source=t.source, target=t.target) for t in (req.context or [])]
         kwargs = dict(
@@ -201,7 +327,7 @@ def create_app() -> FastAPI:
         except LLMError as exc:
             raise HTTPException(502, str(exc)) from exc
 
-    @app.post("/v1/admin/reload", summary="설정 다시 읽기", dependencies=[auth])
+    @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:
         state.config.reload()
         state.engines.load()
@@ -209,9 +335,9 @@ def create_app() -> FastAPI:
         await state.engines.probe_all()
         return {"status": "reloaded", "engines": len(state.engines.snapshot())}
 
-    @app.post("/v1/admin/config", summary="런타임 설정 덮어쓰기", dependencies=[auth])
+    @app.post("/v1/admin/config", summary="Override runtime configuration", dependencies=[auth])
     async def patch_config(patch: dict) -> dict:
-        """가장 높은 우선순위로 얹힌다. 재기동 없이 반영된다."""
+        """Applied at the highest priority. Takes effect without a restart."""
         state.config.set_runtime(patch)
         state.engines.load()
         state.profiles.load()
@@ -226,16 +352,21 @@ class ContextTurn(BaseModel):
 
 
 class TextTranslateRequest(BaseModel):
-    """번역 방향은 요청이 정한다. 코드에 언어쌍 상수가 없다."""
+    # FastAPI 가 이 docstring 을 OpenAPI 스키마 설명으로 노출하므로 영어로 쓴다.
+    """Translation direction is decided by the request. No language-pair constant in code."""
 
-    text: str = Field(..., description="번역할 원문")
-    source_lang: str = Field(..., description="원문 언어 (예: ko)")
-    target_lang: str = Field(..., description="번역 언어 (예: en)")
-    provider: str | None = Field(None, description="생략 시 llm.default_provider")
-    model: str | None = Field(None, description="생략 시 프로바이더의 default_model")
-    style: str | None = Field(None, description="prompts.styles 의 키")
-    context: list[ContextTurn] | None = Field(None, description="직전 대화 턴들")
-    glossary: dict[str, str] | None = Field(None, description="용어집 (원어 → 번역어)")
+    text: str = Field(..., description="Source text to translate")
+    source_lang: str = Field(..., description="Source language (e.g. ko)")
+    target_lang: str = Field(..., description="Target language (e.g. en)")
+    provider: str | None = Field(None, description="Defaults to llm.default_provider if omitted")
+    model: str | None = Field(
+        None, description="Defaults to the provider's default_model if omitted"
+    )
+    style: str | None = Field(None, description="A key of prompts.styles")
+    context: list[ContextTurn] | None = Field(None, description="Preceding conversation turns")
+    glossary: dict[str, str] | None = Field(
+        None, description="Glossary (source term → translated term)"
+    )
     stream: bool = False
 
 
@@ -252,7 +383,7 @@ def _auth_dependency(state: State):
         if not token:
             token = request.headers.get("x-api-key", "").strip()
         if token != key:
-            raise HTTPException(401, "유효하지 않은 API 키")
+            raise HTTPException(401, "Invalid API key")
 
     return check
 
@@ -265,7 +396,7 @@ async def _watch_config(state: State) -> None:
             if state.reload_if_changed():
                 await state.engines.probe_all()
         except Exception as exc:
-            log.error("설정 리로드 실패 (이전 설정을 유지합니다): %s", exc)
+            log.error("Config reload failed (keeping the previous config): %s", exc)
 
 
 def main() -> None:

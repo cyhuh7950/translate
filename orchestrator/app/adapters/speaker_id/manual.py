@@ -38,14 +38,15 @@ def manual(
     """클라이언트가 준 hint 를 그대로 쓴다. 후보가 하나뿐이면 hint 없이도 결정된다."""
     speakers = [p for p in participants if p.get("input")]
     if not speakers:
-        raise SpeakerIdError("입력을 받는 참여자가 없습니다 (모두 input: false)")
+        raise SpeakerIdError("No participant accepts input (all have input: false)")
 
     ids = [p["id"] for p in speakers]
 
     if hint:
         if hint not in ids:
             raise SpeakerIdError(
-                f"'{hint}' 는 이 세션에서 입력을 받는 참여자가 아닙니다 (가능: {', '.join(ids)})"
+                f"'{hint}' is not an input-accepting participant in this session "
+                f"(available: {', '.join(ids)})"
             )
         return hint
 
@@ -53,7 +54,8 @@ def manual(
         return ids[0]
 
     raise SpeakerIdError(
-        f"발화자를 특정할 수 없습니다. 입력 참여자가 여럿({', '.join(ids)})이므로 "
-        f"요청에 speaker 를 지정하거나, 자동 식별이 가능한 speaker_id 구현"
-        f"(예: language_detect)을 등록하세요"
+        f"Cannot determine the speaker. There are multiple input participants "
+        f"({', '.join(ids)}), so specify speaker in the request or register a "
+        f"speaker_id implementation that can identify it automatically "
+        f"(e.g. language_detect)"
     )

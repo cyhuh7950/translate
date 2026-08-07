@@ -60,6 +60,7 @@ class Endpoint:
 class Engine:
     id: str
     kind: str                      # stt | tts | (확장 가능)
+    adapter: str                   # 이 엔진의 API 방언. 레지스트리에서 찾는 이름이다.
     server: str
     modes: list[str]
     streaming: bool
@@ -77,7 +78,7 @@ class Engine:
         candidates = [e for e in self.endpoints if e.matches(ctx)]
         if not candidates:
             raise EngineError(
-                f"엔진 '{self.id}' 에 지금 조건에 맞는 엔드포인트가 없습니다 "
+                f"Engine '{self.id}' has no endpoint matching the current conditions "
                 f"(context={ctx})"
             )
         return sorted(candidates, key=lambda e: e.priority)[0]
@@ -104,7 +105,7 @@ class Engine:
 def _parse_endpoint(raw: dict, engine_id: str) -> Endpoint:
     url = (raw.get("url") or "").strip()
     if not url:
-        raise ConfigError(f"엔진 '{engine_id}' 의 엔드포인트에 url 이 없습니다")
+        raise ConfigError(f"An endpoint of engine '{engine_id}' has no url")
     return Endpoint(
         url=url.rstrip("/"),
         priority=int(raw.get("priority", 100)),
@@ -116,22 +117,29 @@ def _parse_endpoint(raw: dict, engine_id: str) -> Endpoint:
 def _parse_engine(raw: dict) -> Engine:
     eid = (raw.get("id") or "").strip()
     if not eid:
-        raise ConfigError("엔진 항목에 id 가 없습니다")
+        raise ConfigError("An engine entry has no id")
     kind = (raw.get("kind") or "").strip()
     if not kind:
-        raise ConfigError(f"엔진 '{eid}' 에 kind 가 없습니다")
+        raise ConfigError(f"Engine '{eid}' has no kind")
     endpoints = raw.get("endpoints") or []
     if not endpoints:
-        raise ConfigError(f"엔진 '{eid}' 에 endpoints 가 없습니다")
+        raise ConfigError(f"Engine '{eid}' has no endpoints")
     modes = raw.get("modes")
     if not modes:
         raise ConfigError(
-            f"엔진 '{eid}' 에 modes 가 없습니다. "
-            f"실측 성능을 보고 운영자가 지정해야 합니다 (시스템이 추론하지 않습니다)"
+            f"Engine '{eid}' has no modes. "
+            f"The operator must set them based on measured performance "
+            f"(the system does not infer them)"
+        )
+    adapter = (raw.get("adapter") or "").strip()
+    if not adapter:
+        raise ConfigError(
+            f"Engine '{eid}' has no adapter. You must specify that engine's API dialect"
         )
     return Engine(
         id=eid,
         kind=kind,
+        adapter=adapter,
         server=(raw.get("server") or "").strip(),
         modes=list(modes),
         streaming=bool(raw.get("streaming", False)),
@@ -150,12 +158,12 @@ class EngineRegistry:
     def load(self) -> None:
         raw = self._cfg.get("engines")
         if not isinstance(raw, list):
-            raise ConfigError("engines 는 목록이어야 합니다")
+            raise ConfigError("engines must be a list")
         engines = {}
         for item in raw:
             e = _parse_engine(item)
             if e.id in engines:
-                raise ConfigError(f"엔진 id 가 중복입니다: {e.id}")
+                raise ConfigError(f"Duplicate engine id: {e.id}")
             engines[e.id] = e
         # 이전 관측 상태는 유지한다 — 설정만 바뀌었을 뿐 엔진이 죽은 것은 아니다
         for eid, old in self._engines.items():
@@ -164,7 +172,7 @@ class EngineRegistry:
                 engines[eid].ready = old.ready
                 engines[eid].info = old.info
         self._engines = engines
-        log.info("엔진 %d개 로드: %s", len(engines), ", ".join(engines) or "(없음)")
+        log.info("Loaded %d engines: %s", len(engines), ", ".join(engines) or "(none)")
 
     # ---- 조회 -------------------------------------------------------------
 
@@ -173,8 +181,8 @@ class EngineRegistry:
             return self._engines[engine_id]
         except KeyError:
             raise EngineError(
-                f"없는 엔진입니다: '{engine_id}'. "
-                f"사용 가능: {', '.join(self._engines) or '(없음)'}"
+                f"Unknown engine: '{engine_id}'. "
+                f"Available: {', '.join(self._engines) or '(none)'}"
             ) from None
 
     def list(
@@ -219,7 +227,7 @@ class EngineRegistry:
             body = r.json() if r.content else {}
             engine.available = True
             engine.ready = bool(body.get("ready"))
-            engine.last_error = None if engine.ready else body.get("error") or "로딩 중"
+            engine.last_error = None if engine.ready else body.get("error") or "loading"
         except Exception as exc:
             engine.available = False
             engine.ready = False
@@ -244,13 +252,13 @@ class EngineRegistry:
     async def poll_forever(self) -> None:
         interval = float(self._cfg.get("engine_health.poll_interval_s"))
         if interval <= 0:
-            log.info("엔진 헬스 폴링 비활성 (poll_interval_s=%s)", interval)
+            log.info("Engine health polling disabled (poll_interval_s=%s)", interval)
             return
         while True:
             try:
                 await self.probe_all()
             except Exception as exc:
-                log.error("엔진 헬스 폴링 오류: %s", exc)
+                log.error("Engine health polling error: %s", exc)
             await asyncio.sleep(interval)
 
     def snapshot(self) -> list[dict]:

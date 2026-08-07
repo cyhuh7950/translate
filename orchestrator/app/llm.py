@@ -42,8 +42,8 @@ class ProviderRegistry:
         providers = self._cfg.require_section("providers")
         if provider_id not in providers:
             raise LLMError(
-                f"없는 프로바이더입니다: '{provider_id}'. "
-                f"사용 가능: {', '.join(providers) or '(없음)'}"
+                f"Unknown provider: '{provider_id}'. "
+                f"Available: {', '.join(providers) or '(none)'}"
             )
         return providers[provider_id]
 
@@ -51,8 +51,8 @@ class ProviderRegistry:
         pid = (provider_id or self._cfg.get("llm.default_provider") or "").strip()
         if not pid:
             raise LLMError(
-                "LLM 프로바이더가 지정되지 않았습니다. "
-                "요청에 provider 를 주거나 defaults.yaml 의 llm.default_provider 를 채우세요"
+                "No LLM provider specified. "
+                "Pass provider in the request or set llm.default_provider in defaults.yaml"
             )
         if pid in self._cache:
             return self._cache[pid]
@@ -69,12 +69,12 @@ class ProviderRegistry:
         kind = spec.get("kind", "")
         if not registry.has(LLM_KIND, kind):
             return (
-                f"어댑터 계열 '{kind}' 이 등록돼 있지 않습니다 "
-                f"(사용 가능: {', '.join(registry.available(LLM_KIND)) or '없음'})"
+                f"Adapter kind '{kind}' is not registered "
+                f"(available: {', '.join(registry.available(LLM_KIND)) or 'none'})"
             )
         if spec.get("requires_key", True):
             if not os.environ.get(spec.get("api_key_env", ""), "").strip():
-                return f"API 키가 없습니다 ({spec.get('api_key_env')})"
+                return f"API key is missing ({spec.get('api_key_env')})"
         return None
 
     def public_view(self) -> list[dict]:
@@ -110,7 +110,7 @@ class Translator:
         styles = self._cfg.require_section("prompts.styles")
         if style_name not in styles:
             raise LLMError(
-                f"없는 번역 스타일입니다: '{style_name}' (가능: {', '.join(styles)})"
+                f"Unknown translation style: '{style_name}' (available: {', '.join(styles)})"
             )
         return self._cfg.get("prompts.system").format(
             source_lang=source_lang,

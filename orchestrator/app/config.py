@@ -84,7 +84,7 @@ def _env_overrides() -> dict:
         for p in parts[:-1]:
             cursor = cursor.setdefault(p.lower(), {})
             if not isinstance(cursor, dict):  # a__b 와 a__b__c 가 충돌하는 경우
-                raise ConfigError(f"환경변수 설정 경로가 충돌합니다: {key}")
+                raise ConfigError(f"Conflicting config path from environment variable: {key}")
         cursor[parts[-1].lower()] = _coerce(raw)
     return out
 
@@ -92,7 +92,7 @@ def _env_overrides() -> dict:
 def _load_dir(path: Path) -> tuple[dict, dict[Path, float]]:
     """설정 디렉터리의 yaml 을 정해진 순서로 병합한다. (병합결과, 파일별 mtime)"""
     if not path.is_dir():
-        raise ConfigError(f"설정 디렉터리가 없습니다: {path}")
+        raise ConfigError(f"Config directory not found: {path}")
 
     files = sorted(p for p in path.glob("*.yaml") if p.is_file())
     # defaults 를 맨 앞, *.local.yaml 을 맨 뒤로. 나머지는 이름순.
@@ -109,14 +109,14 @@ def _load_dir(path: Path) -> tuple[dict, dict[Path, float]]:
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
-            raise ConfigError(f"{f.name} 파싱 실패: {exc}") from exc
+            raise ConfigError(f"Failed to parse {f.name}: {exc}") from exc
         if not isinstance(data, dict):
-            raise ConfigError(f"{f.name} 최상위는 매핑이어야 합니다")
+            raise ConfigError(f"The top level of {f.name} must be a mapping")
         merged = _deep_merge(merged, data)
         stamps[f] = f.stat().st_mtime
 
     if not merged:
-        raise ConfigError(f"설정 디렉터리에 읽을 내용이 없습니다: {path}")
+        raise ConfigError(f"No readable content in config directory: {path}")
     return merged, stamps
 
 
@@ -140,7 +140,7 @@ class Config:
             data = _deep_merge(data, self._runtime)
             self._data = _expand_vars(data)
             self._stamps = stamps
-            log.info("설정 로드 완료 (%d개 파일, %s)", len(stamps), self._dir)
+            log.info("Config loaded (%d files, %s)", len(stamps), self._dir)
 
     def maybe_reload(self) -> bool:
         """파일이 추가·수정·삭제됐으면 다시 읽는다. 재기동 없이 설정이 반영되도록."""
@@ -148,7 +148,7 @@ class Config:
             current = {p: p.stat().st_mtime for p in self._dir.glob("*.yaml") if p.is_file()}
             if current == self._stamps:
                 return False
-        log.info("설정 파일 변경 감지 — 다시 읽습니다")
+        log.info("Config file change detected — reloading")
         self.reload()
         return True
 
@@ -178,9 +178,9 @@ class Config:
         value = self._lookup(path)
         if value is _MISSING:
             raise ConfigError(
-                f"설정값이 없습니다: '{path}'. "
-                f"{self._dir}/defaults.yaml 에 추가하거나 "
-                f"{ENV_PREFIX}{path.replace('.', ENV_NESTING)} 로 주입하세요"
+                f"Missing config value: '{path}'. "
+                f"Add it to {self._dir}/defaults.yaml or "
+                f"inject it via {ENV_PREFIX}{path.replace('.', ENV_NESTING)}"
             )
         return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
 
@@ -194,7 +194,7 @@ class Config:
     def require_section(self, path: str) -> dict:
         value = self.get(path)
         if not isinstance(value, dict):
-            raise ConfigError(f"'{path}' 는 매핑이어야 합니다 (현재: {type(value).__name__})")
+            raise ConfigError(f"'{path}' must be a mapping (got: {type(value).__name__})")
         return value
 
     def as_dict(self) -> dict:

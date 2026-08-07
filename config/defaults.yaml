@@ -87,8 +87,12 @@ prompts:
 audio:
   # STT 엔진에 보낼 입력 규격
   stt_sample_rate: 16000
-  # TTS 결과를 클라이언트에 돌려줄 기본 포맷
+  # TTS 결과를 클라이언트에 돌려줄 기본 포맷 (wav|mp3|opus|flac|pcm — 엔진이 지원하는 범위)
   tts_response_format: wav
+  tts_speed: 1.0
+  # json  = 메타데이터 + base64 오디오 (수신자가 여럿이어도 한 번에 받는다)
+  # binary= 오디오 바이트만 (수신자가 하나일 때. curl 로 확인하기 편하다)
+  response_mode: json
 
 limits:
   max_input_chars: 5000
