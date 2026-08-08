@@ -36,3 +36,21 @@ profiles:
       - { id: b, lang: "{{target_lang}}", input: true, output: [a] }
     speaker_id: language_detect
     turn_policy: half_duplex
+
+  twoway_voice:
+    # 같은 양방향이지만 누가 말했는지를 **목소리**로 가린다.
+    # 참여자 id 가 a / b 이므로 등록도 그 id 로 한다:
+    #   curl -F speaker_id=a -F files=@my-voice.wav .../v1/speakers/enroll
+    # 등록을 하지 않아도 열린다 — 기본 정책(enrolled_first)이 미등록 목소리를
+    # 남은 참여자에게 배정하고, 자동 등록이 켜져 있으면 대화 중에 배운다.
+    label:
+      en: "Two-way (voice) — tells the speakers apart by their voice"
+      ko: "양방향 (목소리) — 목소리로 발화자를 구분"
+    description:
+      en: "One device shared by two people. Enrolling a voice makes it exact"
+      ko: "한 기기를 두 사람이 함께 쓸 때. 목소리를 등록해 두면 더 정확하다"
+    participants:
+      - { id: a, lang: "{{source_lang}}", input: true, output: [b] }
+      - { id: b, lang: "{{target_lang}}", input: true, output: [a] }
+    speaker_id: voice_print
+    turn_policy: half_duplex

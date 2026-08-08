@@ -21,6 +21,10 @@ WAV 로 감싸 **기존 배치 파이프라인을 그대로** 호출한다. 파�
 
   서버 → 클라이언트
     ready / vad / stt.final / llm.final / tts.chunk(+바이너리) / tts.done / metrics / error
+    speaker.rejected                            등록되지 않은 목소리라 건너뛴 세그먼트
+
+`speaker.rejected` 는 오류가 아니다. 화자 식별이 이 발화를 처리하지 않기로 한 것이고,
+같은 사유가 뒤따르는 metrics 이벤트의 `skipped` 에도 실린다.
 
 `stt.partial` 과 `llm.delta` 는 스트리밍 엔진이 없어 지금 나가지 않는다.
 **프로토콜에서 빼지는 않는다** — 2단계에서 같은 자리에 채운다.
@@ -47,7 +51,7 @@ from starlette.websockets import WebSocketState
 
 from . import diagnostics, preprocess, registry
 from .adapters.llm._base import LLMError
-from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
+from .adapters.speaker_id._base import SpeakerIdError, static_speaker
 from .adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
 from .adapters.vad._base import SPEECH_END, SPEECH_START, VAD_KIND, VadError
 from .audio import duration_s, pcm16_from_bytes, pcm16_to_wav
@@ -56,6 +60,7 @@ from .engines import EngineError
 from .llm import Turn
 from .registry import RegistryError
 from .sessions import SessionError
+from .voiceprints import SessionVoices
 
 log = logging.getLogger("stream")
 
@@ -97,6 +102,9 @@ class StreamHandler:
         self._session = None                 # sessions.Session
         self._vad = None
         self._turn = None
+        # 세션 중 자동으로 배운 목소리. **메모리에만 있고 연결이 끊기면 함께 사라진다.**
+        # WS 세션은 "처음 나온 목소리"라는 개념이 성립하므로 자동 등록이 여기에 붙는다.
+        self._voices = None                  # voiceprints.SessionVoices
         self._turn_state = TurnState()
         self._deliver_until = 0.0            # 재생 중이라고 볼 시각 (loop.time 기준)
 
@@ -134,11 +142,20 @@ class StreamHandler:
         await self._send({"type": "error", "code": code, "message": message, **self._route()})
 
     def _route(self) -> dict:
-        """발화자 쪽 이벤트에 붙는 from/to. 세션이 아직 없으면 비어 있다."""
+        """
+        발화자 쪽 이벤트에 붙는 from/to. 세션이 아직 없거나 정할 수 없으면 비어 있다.
+
+        여기서는 **오디오를 보지 않는 판정만** 쓴다(hint 이거나 후보가 하나뿐인 경우).
+        vad·ready·error 는 오디오가 확정되기 전에도 나가는 이벤트라, 이것 하나 붙이자고
+        화자 임베딩 엔진을 부를 수는 없기 때문이다. 실제 발화자는 세그먼트가 처리될 때
+        파이프라인이 정하고, 그 결과가 stt.final 이후의 이벤트에 실린다.
+        """
         if self._session is None:
             return {}
         try:
             speaker = self._speaker_id()
+            if speaker is None:
+                return {}
             return {"from": speaker, "to": [p.id for p in self._session.listeners_of(speaker)]}
         except Exception:
             # 오류 이벤트를 보내려다 다시 죽으면 안 된다. 그 이유는 error 로 이미 나간다.
@@ -241,6 +258,7 @@ class StreamHandler:
             self._turn = registry.resolve(TURN_KIND, self._session.turn_policy)(
                 self._cfg.require_section("turn")
             )
+            self._voices = SessionVoices(self._cfg.get("speaker_id.auto_enroll.utterances"))
         except (RegistryError, VadError, ConfigError) as exc:
             raise StreamError("stream.setup_failed", str(exc)) from exc
 
@@ -280,14 +298,11 @@ class StreamHandler:
             **self._route(),
         })
 
-    def _speaker_id(self) -> str:
-        """발화자 결정. 단방향은 후보가 하나라 hint 없이 정해진다."""
-        identify = registry.resolve(SPEAKER_ID_KIND, self._session.speaker_id)
-        return identify(
+    def _speaker_id(self) -> str | None:
+        """오디오 없이 알 수 있는 발화자. 단방향은 후보가 하나라 hint 없이 정해진다."""
+        return static_speaker(
             [p.as_dict() for p in self._session.participants],
-            hint=self._options.get("speaker_hint"),
-            audio=None,
-            text=None,
+            self._options.get("speaker_hint"),
         )
 
     # ---- 수신 -------------------------------------------------------------
@@ -456,6 +471,7 @@ class StreamHandler:
                 seg=segment.seg,
                 context=self._context_for(),
                 progress=progress,
+                voices=self._voices,
                 **self._options,
             )
         except (SessionError, SpeakerIdError) as exc:

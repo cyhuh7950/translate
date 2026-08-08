@@ -80,6 +80,24 @@ engines:
         priority: 20
         api_key_env: ENGINE_KEY_MELOTTS
 
+  - id: speaker
+    # 화자 임베딩. STT·TTS 와 나란한 또 하나의 엔진 종류일 뿐이고, 오케스트레이터는
+    # 이것도 URL 로만 다룬다. 종류는 이 kind 로만 판단한다(포트로 추론하지 않는다).
+    kind: speaker
+    adapter: voice_speaker
+    server: oracle
+    # 3초 발화에 0.1초 남짓이라 어느 모드에서든 부담이 되지 않는다.
+    # STT 처럼 발화 길이에 비례하지만 계수가 훨씬 작다.
+    modes: [batch, ptt, realtime]
+    streaming: false
+    endpoints:
+      # NPM 에 등록돼 있지 않다. 외부 주소가 없으므로 내부 주소 하나뿐이다 —
+      # 오케스트레이터가 다른 서버로 옮겨가면 여기에 도달 가능한 주소를 하나 더 단다.
+      - url: http://voice-speaker:8301
+        when: { same_server: true }
+        priority: 10
+        api_key_env: ENGINE_KEY_SPEAKER
+
   # ── GPU 서버 ────────────────────────────────────────────────────────
   # WSL 쪽 엔진 설치가 끝나면 여기에 추가한다. 형식은 위와 같고, 코드 수정은 없다.
   # - id: whisper-gpu

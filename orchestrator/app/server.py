@@ -37,7 +37,8 @@ from . import preprocess, registry
 from .adapters.audio_filter._base import AUDIO_FILTER_KIND
 from .adapters.llm._base import LLMError
 from .adapters.routing.policies import ROUTING_KIND
-from .adapters.speaker_id.manual import SPEAKER_ID_KIND, SpeakerIdError
+from .adapters.speaker_id._base import SPEAKER_ID_KIND, SpeakerIdError
+from .adapters.speaker_policy._base import SPEAKER_POLICY_KIND
 from .adapters.turn.policies import TURN_KIND
 from .adapters.vad._base import VAD_KIND
 from .config import Config, ConfigError
@@ -49,6 +50,7 @@ from .pipeline import Pipeline
 from .registry import RegistryError
 from .sessions import ProfileRegistry, SessionError
 from .streaming import StreamHandler
+from .voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
 
 log = logging.getLogger("orchestrator")
 
@@ -68,7 +70,13 @@ class State:
         self.profiles = ProfileRegistry(self.config)
         self.providers = ProviderRegistry(self.config)
         self.translator = Translator(self.config, self.providers)
-        self.pipeline = Pipeline(self.config, self.engines, self.translator)
+        # 명시적으로 등록된 목소리(파일)와 그것을 만들어 주는 엔진 호출부.
+        # 자동 등록분은 여기 오지 않는다 — WS 세션의 메모리에만 산다.
+        self.voiceprints = VoicePrintStore(self.config)
+        self.speaker_engine = SpeakerEngine(self.config, self.engines)
+        self.pipeline = Pipeline(
+            self.config, self.engines, self.translator, self.voiceprints, self.speaker_engine
+        )
 
     def reload_if_changed(self) -> bool:
         if not self.config.maybe_reload():
@@ -234,6 +242,18 @@ def create_app() -> FastAPI:
                 "default_policy": c.get("session.default_turn_policy"),
                 "available": registry.available(TURN_KIND),
             },
+            # 화자 식별. 클라이언트는 이 값들로 "등록된 목소리 N개 / 정책 X" 같은
+            # UI 를 그린다. ★ 임베딩 자체는 어떤 경우에도 여기로 나가지 않는다.
+            "speaker_id": {
+                "default": c.get("session.default_speaker_id"),
+                "available": registry.available(SPEAKER_ID_KIND),
+                "policy": c.get("speaker_id.policy"),
+                "policies": registry.available(SPEAKER_POLICY_KIND),
+                "threshold": c.get("speaker_id.threshold"),
+                "auto_enroll": c.get("speaker_id.auto_enroll.enabled"),
+                "enrolled": state.voiceprints.count(),
+                "store_error": state.voiceprints.status()["error"],
+            },
             # 클라이언트 입력 방식(누르고 말하기 / 핸즈프리)의 목록과 기본값.
             # 목록을 클라이언트에 하드코딩하지 않기 위해 여기서 내보낸다.
             "client": {
@@ -395,6 +415,136 @@ def create_app() -> FastAPI:
             }
         except LLMError as exc:
             raise HTTPException(502, str(exc)) from exc
+
+    # ---- 음성 등록 (voice print) --------------------------------------------
+    #
+    # ★ 여기서 만들어지는 임베딩은 생체정보에 준하는 개인정보다. 목록 응답에는
+    #   절대 벡터를 싣지 않는다 (app/voiceprints.py 의 주석을 볼 것).
+
+    @app.get("/v1/speakers", summary="Enrolled voice prints", dependencies=[auth])
+    async def list_speakers() -> dict:
+        """
+        Voices enrolled on this server, without the embeddings themselves.
+
+        Voices learned automatically during a live session are NOT listed here:
+        they only ever exist in that session's memory and disappear with it.
+        """
+        state.reload_if_changed()
+        c = state.config
+        status = state.voiceprints.status()
+        return {
+            "policy": c.get("speaker_id.policy"),
+            "threshold": c.get("speaker_id.threshold"),
+            "auto_enroll": c.get("speaker_id.auto_enroll.enabled"),
+            "count": status["count"],
+            "error": status["error"],
+            "speakers": [vp.public() for vp in state.voiceprints.list()],
+        }
+
+    @app.post(
+        "/v1/speakers/enroll",
+        summary="Enroll or replace a voice print",
+        dependencies=[auth],
+    )
+    async def enroll_speaker(
+        speaker_id: str = Form(
+            ..., description="Participant id this voice belongs to (e.g. a, b, speaker)"
+        ),
+        name: str | None = Form(None, description="Display name. Defaults to the id"),
+        mode: str | None = Form(None, description="Session mode used to route the speaker engine"),
+        files: list[UploadFile] = File(
+            ..., description="Utterances of this person. More utterances give a steadier print"
+        ),
+    ) -> dict:
+        """
+        Averages the embeddings of the uploaded utterances and stores the result.
+
+        An existing entry with the same id is replaced. `min_pairwise_similarity`
+        reports how alike the uploaded utterances were: a low value usually means
+        one of them is somebody else.
+        """
+        state.reload_if_changed()
+        c = state.config
+
+        limit = int(c.get("server.max_upload_bytes"))
+        payload: list[tuple[str, bytes, str]] = []
+        total = 0
+        for f in files:
+            data = await f.read()
+            if not data:
+                continue
+            total += len(data)
+            payload.append((
+                f.filename or c.get("audio.pcm_filename"),
+                data,
+                f.content_type or "application/octet-stream",
+            ))
+        if total > limit:
+            raise HTTPException(413, f"Audio is too large ({total} > {limit} bytes)")
+
+        minimum = int(c.get("speaker_id.min_enroll_files"))
+        if len(payload) < minimum:
+            raise HTTPException(
+                400,
+                f"Enrolling '{speaker_id}' needs at least {minimum} non-empty audio file(s), "
+                f"got {len(payload)} (speaker_id.min_enroll_files)",
+            )
+
+        try:
+            body = await state.speaker_engine.enroll(
+                mode=mode or c.get("session.default_mode"), files=payload
+            )
+        except EngineError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        except RegistryError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        try:
+            vp = state.voiceprints.put(
+                speaker_id=speaker_id,
+                name=name or speaker_id,
+                embedding=body["embedding"],
+                utterances=int(body.get("count") or len(payload)),
+                dim=int(body.get("dim") or 0),
+                engine=str(body.get("engine") or ""),
+                model=str(body.get("model") or ""),
+            )
+        except VoicePrintError as exc:
+            raise HTTPException(500, str(exc)) from exc
+
+        threshold = float(c.get("speaker_id.threshold"))
+        spread = body.get("min_pairwise_similarity")
+        warning = None
+        if spread is not None and float(spread) < threshold:
+            warning = (
+                f"The uploaded utterances are only {float(spread):.2f} alike, which is below "
+                f"the match threshold of {threshold}. They may not all be the same person"
+            )
+        return {
+            "speaker": vp.public(),
+            "min_pairwise_similarity": spread,
+            "threshold": threshold,
+            "warning": warning,
+            "enrolled": state.voiceprints.count(),
+        }
+
+    @app.delete(
+        "/v1/speakers/{speaker_id}",
+        summary="Delete an enrolled voice print",
+        dependencies=[auth],
+    )
+    async def delete_speaker(speaker_id: str) -> dict:
+        """Removes the stored embedding immediately."""
+        state.reload_if_changed()
+        try:
+            removed = state.voiceprints.delete(speaker_id)
+        except VoicePrintError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        if not removed:
+            raise HTTPException(404, f"No voice print is enrolled for '{speaker_id}'")
+        return {"deleted": speaker_id, "enrolled": state.voiceprints.count()}
 
     # ---- 실시간 스트림 ------------------------------------------------------
     #

@@ -9,6 +9,14 @@
     이 필드가 처음부터 있어야 양방향으로 갈 때 프로토콜을 깨지 않는다.
   - 처리 단위는 발화 전체가 아니라 **세그먼트**다. 지금은 세그먼트가 하나뿐이지만
     스트리밍으로 갈 때 이 경계가 그대로 쓰인다.
+
+세그먼트를 건너뛰는 두 가지
+---------------------------
+둘 다 오류가 아니라 정상적인 결과다. 예외를 던지지 않고 빈 결과를 돌려주며,
+`metrics.skipped` 에 사유가 남는다.
+
+    인식된 텍스트가 없다   무음이거나 STT 가 아무것도 못 알아들었다
+    화자가 거부됐다        등록되지 않은 목소리(옆 사람·TV)로 판정됐다
 """
 
 from __future__ import annotations
@@ -18,13 +26,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from . import registry
-from .adapters.routing.policies import ROUTING_KIND
-from .adapters.speaker_id.manual import SPEAKER_ID_KIND
+from . import enginecall
+from .adapters.speaker_id._base import IdentifyContext, Utterance, identify
 from .config import Config
 from .engines import Engine, EngineRegistry
 from .llm import Translator, Turn
 from .sessions import Session
+from .voiceprints import SessionVoices, SpeakerEngine, VoicePrintStore
 
 log = logging.getLogger("pipeline")
 
@@ -32,7 +40,8 @@ STT_KIND = "stt"
 TTS_KIND = "tts"
 
 # 단계가 끝날 때마다 부르는 콜백. WS 스트림이 결과를 기다리지 않고 흘려보내는 통로다.
-#   progress(stage, payload)  stage = "stt.final" | "llm.final" | "tts.final"
+#   progress(stage, payload)
+#     stage = "speaker.rejected" | "stt.final" | "llm.final" | "tts.final"
 # HTTP 경로는 넘기지 않으므로 동작이 그대로다. 2단계에서 stt.partial / llm.delta 가
 # 생기면 같은 통로에 stage 를 하나 더 얹는다 — 호출자는 고치지 않는다.
 Progress = Callable[[str, dict], Awaitable[None]]
@@ -93,24 +102,25 @@ class Pipeline:
         cfg: Config,
         engines: EngineRegistry,
         translator: Translator,
+        voiceprints: VoicePrintStore,
+        speaker_engine: SpeakerEngine,
     ):
         self._cfg = cfg
         self._engines = engines
         self._translator = translator
+        self._voiceprints = voiceprints
+        self._speaker_engine = speaker_engine
 
     # ---- 엔진 선택 / 어댑터 생성 -------------------------------------------
 
     def _pick(self, kind: str, mode: str, requested: str | None) -> Engine:
-        policy = registry.resolve(ROUTING_KIND, self._cfg.get("routing.policy"))
-        return policy(self._engines, kind=kind, mode=mode, requested=requested)
+        return enginecall.pick(self._cfg, self._engines, kind=kind, mode=mode, requested=requested)
 
     def _adapter(self, engine: Engine):
-        cls = registry.resolve(engine.kind, engine.adapter)
-        return cls(self._cfg.require_section("engine_http"))
+        return enginecall.adapter(self._cfg, engine)
 
     def _target(self, engine: Engine) -> tuple[str, str]:
-        ep = self._engines.endpoint_for(engine)
-        return ep.url, ep.api_key
+        return enginecall.target(self._engines, engine)
 
     # ---- 단계 --------------------------------------------------------------
 
@@ -165,6 +175,7 @@ class Pipeline:
         glossary: dict[str, str] | None = None,
         with_audio: bool = True,
         progress: Progress | None = None,
+        voices: SessionVoices | None = None,
     ) -> SegmentResult:
         loop = asyncio.get_running_loop()
         started = loop.time()
@@ -175,10 +186,41 @@ class Pipeline:
                 await progress(stage, payload)
 
         # 1) 발화자 결정. 단방향이면 후보가 하나라 hint 없이도 정해진다.
-        identify = registry.resolve(SPEAKER_ID_KIND, session.speaker_id)
-        speaker_id = identify(
-            [p.as_dict() for p in session.participants], hint=speaker_hint, audio=None, text=None
+        #
+        # 오디오를 그대로 넘긴다 — voice_print 처럼 목소리를 들어야 하는 구현이 있고,
+        # STT 가 받는 것과 같은 바이트를 써야 둘의 판단이 어긋나지 않는다.
+        # 구현이 코루틴이면 await, 아니면 그대로 부른다 (identify() 가 흡수한다).
+        decision = await identify(
+            session.speaker_id,
+            [p.as_dict() for p in session.participants],
+            hint=speaker_hint,
+            audio=Utterance(data=audio, filename=filename, content_type=content_type),
+            text=None,
+            ctx=IdentifyContext(
+                config=self._cfg,
+                engine=self._speaker_engine,
+                store=self._voiceprints,
+                voices=voices,
+                mode=session.mode,
+            ),
         )
+        metrics.update(decision.detail)
+
+        if decision.speaker is None:
+            # 등록되지 않은 목소리(TV·행인)로 판정됐다. **오류가 아니다.**
+            # 인식 텍스트가 비었을 때와 같은 방식으로 조용히 건너뛰고,
+            # 왜 건너뛰었는지는 metrics 와 이 이벤트로 알 수 있게 남긴다.
+            reason = decision.reason or "speaker not identified"
+            metrics["skipped"] = reason
+            metrics["total_ms"] = round((loop.time() - started) * 1000)
+            skipped = SegmentResult(
+                seg=seg, speaker="", source_lang="", source_text="", metrics=metrics
+            )
+            await emit("speaker.rejected", {"seg": seg, "reason": reason, **decision.detail})
+            log.info("Segment %s skipped — %s", seg, reason)
+            return skipped
+
+        speaker_id = decision.speaker
         speaker = session.by_id(speaker_id)
 
         # 2) STT — 발화자의 언어로 인식한다

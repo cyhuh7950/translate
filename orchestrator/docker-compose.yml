@@ -26,6 +26,10 @@ services:
       # diagnostics.save_segments 가 false(기본)면 아무것도 쓰이지 않는다.
       # 켜면 사용자 음성이 이 폴더에 평문 WAV 로 남는다 — .gitignore 에 들어 있다.
       - ${DIAGNOSTICS_DIR:-../diagnostics}:/diagnostics
+      # 쓰기 가능한 데이터 볼륨. 지금은 등록된 목소리(voice print)가 여기 들어간다.
+      # config/ 는 읽기전용이라 여기에 쓸 수 없으므로 볼륨을 따로 둔다.
+      # ★ 저장되는 임베딩은 생체정보에 준하는 개인정보다 — .gitignore 에 들어 있다.
+      - ${DATA_DIR:-../data}:/data
     mem_limit: ${MEM_LIMIT:-1g}
     networks:
       - proxy-network

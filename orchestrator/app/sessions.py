@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import registry
-from .adapters.speaker_id.manual import SPEAKER_ID_KIND
+from .adapters.speaker_id._base import SPEAKER_ID_KIND
 from .config import Config, ConfigError
 from .i18n import localize
 
