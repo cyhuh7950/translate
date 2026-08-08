@@ -49,18 +49,18 @@ import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from . import diagnostics, preprocess, registry
-from .adapters.llm._base import LLMError
-from .adapters.speaker_id._base import SpeakerIdError, static_speaker
-from .adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
-from .adapters.vad._base import SPEECH_END, SPEECH_START, VAD_KIND, VadError
-from .audio import duration_s, pcm16_from_bytes, pcm16_to_wav
-from .config import ConfigError
-from .engines import EngineError
-from .llm import Turn
-from .registry import RegistryError
-from .sessions import SessionError
-from .voiceprints import SessionVoices
+from ...core import diagnostics, preprocess, registry
+from ...core.adapters.llm._base import LLMError
+from ...core.adapters.speaker_id._base import SpeakerIdError, static_speaker
+from ...core.adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
+from ...core.adapters.vad._base import SPEECH_END, SPEECH_START, VAD_KIND, VadError
+from ...core.audio import duration_s, pcm16_from_bytes, pcm16_to_wav
+from ...core.config import ConfigError
+from ...core.engines import EngineError
+from ...core.llm import Turn
+from ...core.registry import RegistryError
+from ...core.sessions import SessionError
+from ...core.voiceprints import SessionVoices
 
 log = logging.getLogger("stream")
 
@@ -94,9 +94,10 @@ class StreamHandler:
     워커를 하나만 두는 이유는 세그먼트 순서를 보장하기 위해서다.
     """
 
-    def __init__(self, ws: WebSocket, ctx: Any):
+    def __init__(self, ws: WebSocket, ctx: Any, pipeline: Any):
         self._ws = ws
-        self._ctx = ctx                      # server.State
+        self._ctx = ctx                      # core.moduleapi.ModuleContext
+        self._pipeline = pipeline            # modules.translate.pipeline.Pipeline
         self._cfg = ctx.config
 
         self._session = None                 # sessions.Session
@@ -450,7 +451,7 @@ class StreamHandler:
 
         # 배경 음성 게이트. VAD 가 경계를 옳게 잡아도 세그먼트 **안쪽**의 휴지 구간에
         # 남은 TV·옆사람 소리는 그대로 STT 로 넘어간다. 그것을 여기서 지운다.
-        # PTT(HTTP 업로드)와 같은 구현을 쓴다 — app/preprocess.py 를 볼 것.
+        # PTT(HTTP 업로드)와 같은 구현을 쓴다 — app/core/preprocess.py 를 볼 것.
         # 길이는 바뀌지 않으므로 아래 시간 계산과 진단 사이드카의 시간축은 그대로다.
         pcm, gate_metrics = preprocess.filter_pcm(self._cfg, segment.pcm, self._sample_rate)
 
@@ -463,7 +464,7 @@ class StreamHandler:
         result = None
         failure: tuple[str, str] | None = None
         try:
-            result = await self._ctx.pipeline.run_audio(
+            result = await self._pipeline.run_audio(
                 self._session,
                 audio=wav,
                 filename=self._cfg.get("stream.segment_filename"),
@@ -539,7 +540,7 @@ class StreamHandler:
         빠진 경우도 마찬가지다 — 그때는 무엇을 채워야 하는지가 ConfigError 메시지에
         그대로 들어 있으니 경고 로그로 충분하다.
 
-        저장 내용은 `diagnostics.py` 와 defaults.yaml 의 `diagnostics:` 를 볼 것.
+        저장 내용은 `core/diagnostics.py` 와 defaults.yaml 의 `diagnostics:` 를 볼 것.
         **켜면 사용자 음성이 디스크에 남는다.**
         """
         try:

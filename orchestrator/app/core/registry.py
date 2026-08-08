@@ -12,7 +12,7 @@
 
 새 구현을 추가하는 일은 **파일 하나 추가**로 끝난다. 기존 파일을 열 필요가 없다.
 
-    # app/adapters/vad/webrtc.py
+    # app/core/adapters/vad/webrtc.py
     from ..registry import register
 
     @register("vad", "webrtc")

@@ -124,7 +124,30 @@ limits:
   max_audio_seconds: 600
 
 # ---------------------------------------------------------------------------
-# 실시간 스트림 (WebSocket)
+# 기능 모듈의 설정 규약
+# ---------------------------------------------------------------------------
+#
+# 오케스트레이터는 기능을 폴더 하나씩(`app/modules/<이름>/`) 붙인다.
+# 음성 번역이 첫 번째이고, 앞으로 문서 음성 변환·외국어 학습·음성 대화가 붙는다.
+#
+#   ★ 모듈은 자기 이름의 **최상위 섹션 하나**를 갖는다. 다른 모듈의 섹션을 읽지 않는다.
+#
+#       tutor:                # app/modules/tutor/ 의 것
+#         levels: [beginner, intermediate]
+#
+#   공용 섹션(server, auth, session, audio, engines, speaker_id, vad, turn,
+#   audio_filter, llm, prompts, limits, diagnostics …)은 core 의 것이고
+#   어느 모듈이든 읽어도 된다. 쓰는 쪽은 어디에도 없다.
+#
+#   모듈은 자기 섹션을 `/v1/config` 응답에 실을 수 있다. 그래야 그 모듈의
+#   클라이언트 UI 도 서버 응답만 보고 그려진다 — 화면에 상수를 두지 않기 위해서다.
+#   계약은 `orchestrator/app/core/moduleapi.py` 를 볼 것.
+#
+# 아래 `stream:` 은 번역 모듈이 WebSocket 엔드포인트를 열 때 쓰는 값들이다.
+# (역사적인 이유로 이름이 모듈명과 다르다. 새 모듈은 위 규약대로 자기 이름을 쓸 것)
+
+# ---------------------------------------------------------------------------
+# 실시간 스트림 (WebSocket) — 번역 모듈
 # ---------------------------------------------------------------------------
 
 stream:
@@ -145,7 +168,7 @@ stream:
   unauthorized_close_code: 1008
 
 vad:
-  # app/adapters/vad/ 에 등록된 구현 이름. 새 백엔드는 파일을 하나 넣고 여기서 고른다.
+  # app/core/adapters/vad/ 에 등록된 구현 이름. 새 백엔드는 파일을 하나 넣고 여기서 고른다.
   # energy 는 의존성이 numpy 뿐이라 CPU 를 운영 서비스와 나눠 쓰는 환경에 적합하다.
   # silero(torch)·webrtc(C 확장)를 붙이면 판정이 정확해지는 대신 무거워진다.
   backend: energy
@@ -201,7 +224,7 @@ audio_filter:
   # 조용한 환경의 깨끗한 음성에는 영향이 없다(잘라낼 것이 없어 그대로 통과한다).
   enabled: true
 
-  # app/adapters/audio_filter/ 에 등록된 구현 이름.
+  # app/core/adapters/audio_filter/ 에 등록된 구현 이름.
   # 새 필터는 그 폴더에 파일을 하나 넣고 여기서 이름으로 고른다.
   implementation: dominant_gate
 
@@ -249,7 +272,7 @@ speaker_id:
   #   개인정보다. 명시적으로 등록한 것만 파일에 남고(store_path), 대화 중 저절로
   #   배운 것은 메모리에만 두었다가 세션과 함께 버린다.
 
-  # app/adapters/speaker_policy/ 에 등록된 정책 이름.
+  # app/core/adapters/speaker_policy/ 에 등록된 정책 이름.
   #   strict          등록된 목소리만 받는다. 미달이면 버린다.
   #                   회의실처럼 참여자가 고정된 자리에 맞는다. 등록된 화자가 하나도
   #                   없으면 아무것도 통역되지 않는다 — 그것이 이 정책의 정의다.

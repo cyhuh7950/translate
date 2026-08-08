@@ -22,9 +22,42 @@ STT → LLM → TTS 로 음성을 번역해 다시 음성으로 돌려주는 애
 
 | 폴더 | 내용 |
 |---|---|
-| `orchestrator/` | 파이프라인 코어, STT/LLM/TTS 어댑터, WebSocket·HTTP API |
+| `orchestrator/` | 공용 기반(core) + 기능 모듈(modules), WebSocket·HTTP API |
 | `web/` | 웹 클라이언트 (nginx + 정적 HTML/JS). 마이크 캡처, 결과 표시, 오디오 재생 |
 | `config/` | **이 앱의 두뇌.** 엔진 레지스트리, LLM 프로바이더, 세션 프로필, 번역 언어, 기본값 |
+
+### 오케스트레이터 안쪽 — core 와 modules
+
+```
+orchestrator/app/
+├── core/                공용 기반. 어느 기능에도 종속되지 않는 것만 둔다
+│   ├── config.py        설정 로더 / registry.py 구현체 레지스트리 / i18n.py 표시 언어
+│   ├── engines.py       원격 엔진 레지스트리 / enginecall.py 선택·어댑터·주소
+│   ├── speech.py        오디오↔텍스트, 화자 식별 — 흐름에 종속되지 않는 단계
+│   ├── llm.py           프로바이더 레지스트리와 번역기
+│   ├── sessions.py      세션 프로필과 참여자 모델 / voiceprints.py 음성 등록
+│   ├── moduleapi.py     모듈 계약 (ModuleContext / @module)
+│   └── adapters/        교체 가능한 구현체 (파일 하나 넣으면 자동 등록)
+├── modules/
+│   └── translate/       음성 번역 — pipeline.py 흐름, streaming.py WS, routes.py 입구
+└── server.py            조립만 한다 (/health, /v1/config, /v1/speakers/*, /v1/admin/*)
+```
+
+**기능 하나 = 폴더 하나다.** `app/modules/` 아래 폴더를 넣으면 붙고 빼면 떨어진다 —
+목록은 코드 어디에도 없다. 모듈은 `core` 만 알기 때문에 폴더째 다른 프로젝트로
+옮겨 붙일 수 있다. 계약(라우트 / `/v1/config` 기여 / 수명주기 훅 / `ModuleContext`)은
+[`orchestrator/app/core/moduleapi.py`](orchestrator/app/core/moduleapi.py) 상단 주석에 있다.
+
+설정도 같은 경계를 따른다. **모듈은 자기 이름의 최상위 섹션 하나를 갖고,
+다른 모듈의 섹션을 읽지 않는다.** 공용 섹션(`server`, `auth`, `session`, `audio`,
+`engines`, `speaker_id`, `vad`, `turn`, `llm` …)은 core 의 것이고 누구나 읽어도 된다.
+
+| | 라우트 |
+|---|---|
+| core | `/health`, `/v1/config`, `/v1/models`, `/v1/speakers/*`, `/v1/admin/*` |
+| translate 모듈 | `/v1/translate/*`, WebSocket(`stream.path`) |
+
+음성 등록(`/v1/speakers/*`)이 core 인 것은 어느 모듈이든 화자를 알아야 할 수 있어서다.
 
 ## 설계 원칙 (요약)
 

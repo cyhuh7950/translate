@@ -1,8 +1,17 @@
 """
-오케스트레이터 HTTP 서버 — 1단계 골격.
+오케스트레이터 HTTP 서버 — 조립만 한다.
 
-지금 있는 것은 설정 로더·레지스트리·엔진 레지스트리·프로필이고,
-번역 파이프라인(STT→LLM→TTS)은 다음 단계에서 붙는다.
+여기 있는 것은 **어느 기능에도 속하지 않는 것들**뿐이다.
+
+    /health          살아 있는가
+    /v1/config       클라이언트가 UI 를 그리는 근거 (모듈들이 자기 섹션을 얹는다)
+    /v1/models       프로바이더가 실제로 내주는 모델 목록
+    /v1/speakers/*   음성 등록 — 어느 모듈이든 쓰므로 core 다
+    /v1/admin/*      설정 리로드·오버라이드
+
+기능은 `app/modules/` 아래 폴더로 붙는다. 이 파일은 그 목록을 알지 못한다 —
+패키지를 훑어 자동 등록되고, 각 모듈이 자기 라우터와 `/v1/config` 섹션을 낸다.
+계약은 `app/core/moduleapi.py` 를 볼 것.
 
 `GET /v1/config` 가 이 골격의 핵심이다. 클라이언트는 이 응답만 보고 UI 를 그린다.
 엔진 목록도, 프로바이더 목록도, 프로필(단방향/양방향)도 클라이언트에 하드코딩하지 않는다.
@@ -11,11 +20,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 from contextlib import asynccontextmanager
-from urllib.parse import quote
 
 from fastapi import (
     Depends,
@@ -25,44 +32,45 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
-    Response,
     UploadFile,
     WebSocket,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
 
-from . import preprocess, registry
-from .adapters.audio_filter._base import AUDIO_FILTER_KIND
-from .adapters.llm._base import LLMError
-from .adapters.routing.policies import ROUTING_KIND
-from .adapters.speaker_id._base import SPEAKER_ID_KIND, SpeakerIdError
-from .adapters.speaker_policy._base import SPEAKER_POLICY_KIND
-from .adapters.turn.policies import TURN_KIND
-from .adapters.vad._base import VAD_KIND
-from .config import Config, ConfigError
-from .engines import EngineError, EngineRegistry
-from .i18n import localize
-from .i18n import normalize as normalize_locale
-from .llm import LLM_KIND, ProviderRegistry, Translator, Turn
-from .pipeline import Pipeline
-from .registry import RegistryError
-from .sessions import ProfileRegistry, SessionError
-from .streaming import StreamHandler
-from .voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
+from .core import moduleapi, registry
+from .core.adapters.audio_filter._base import AUDIO_FILTER_KIND
+from .core.adapters.llm._base import LLMError
+from .core.adapters.routing.policies import ROUTING_KIND
+from .core.adapters.speaker_id._base import SPEAKER_ID_KIND
+from .core.adapters.speaker_policy._base import SPEAKER_POLICY_KIND
+from .core.adapters.turn.policies import TURN_KIND
+from .core.adapters.vad._base import VAD_KIND
+from .core.config import Config, ConfigError
+from .core.engines import EngineError, EngineRegistry
+from .core.i18n import localize
+from .core.i18n import normalize as normalize_locale
+from .core.llm import ProviderRegistry, Translator
+from .core.moduleapi import ModuleContext
+from .core.registry import RegistryError
+from .core.sessions import ProfileRegistry
+from .core.speech import SpeechService
+from .core.voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
 
 log = logging.getLogger("orchestrator")
 
 # 어댑터가 사는 패키지. 여기 파일을 넣으면 자동으로 등록된다 — 목록을 코드에 나열하지 않는다.
-ADAPTER_PACKAGE = "app.adapters"
+ADAPTER_PACKAGE = "app.core.adapters"
+
+# 기능 모듈이 사는 패키지. 여기 폴더를 넣으면 자동으로 등록된다 — 마찬가지다.
+MODULE_PACKAGE = "app.modules"
 
 # 설정 디렉터리는 환경변수로만 받는다. 이것 하나만은 부트스트랩이라 코드가 알아야 한다.
 CONFIG_DIR_ENV = "TRANSLATE_CONFIG_DIR"
 
 
 class State:
-    """앱이 들고 있는 것들. 설정이 바뀌면 통째로 다시 만든다."""
+    """앱이 들고 있는 공용 서비스들. 설정이 바뀌면 통째로 다시 만든다."""
 
     def __init__(self, config_dir: str):
         self.config = Config(config_dir)
@@ -74,8 +82,10 @@ class State:
         # 자동 등록분은 여기 오지 않는다 — WS 세션의 메모리에만 산다.
         self.voiceprints = VoicePrintStore(self.config)
         self.speaker_engine = SpeakerEngine(self.config, self.engines)
-        self.pipeline = Pipeline(
-            self.config, self.engines, self.translator, self.voiceprints, self.speaker_engine
+        # 오디오↔텍스트와 화자 식별. 흐름에 종속되지 않는 단계라 core 에 있고,
+        # 모듈(번역·문서 음성화·학습·대화)이 전부 이것을 쓴다.
+        self.speech = SpeechService(
+            self.config, self.engines, self.voiceprints, self.speaker_engine
         )
 
     def reload_if_changed(self) -> bool:
@@ -118,9 +128,13 @@ def create_app() -> FastAPI:
     # 어댑터를 먼저 등록해야 프로필 가용성 판단이 정확하다.
     # main() 이 아니라 여기서 부르는 이유는, uvicorn 이 팩토리로 직접 부를 수도 있기 때문.
     registry.discover(ADAPTER_PACKAGE)
+    moduleapi.discover(MODULE_PACKAGE)
 
     state = State(_config_dir())
     cfg = state.config
+    # 모듈은 create_app() 안에서 만들어지지만 lifespan 은 그 뒤에 돈다.
+    # 리스트를 미리 두고 채우는 이유가 그것이다.
+    modules: list[moduleapi.Module] = []
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -132,8 +146,15 @@ def create_app() -> FastAPI:
             tasks.append(asyncio.create_task(state.engines.poll_forever()))
         tasks.append(asyncio.create_task(_watch_config(state)))
         try:
+            for mod in modules:
+                await mod.startup()
             yield
         finally:
+            for mod in modules:
+                try:
+                    await mod.shutdown()
+                except Exception as exc:   # 한 모듈이 죽어도 나머지는 정리한다
+                    log.error("Module '%s' failed to shut down: %s", mod.name, exc)
             for t in tasks:
                 t.cancel()
 
@@ -153,6 +174,23 @@ def create_app() -> FastAPI:
     )
 
     auth = Depends(_auth_dependency(state))
+
+    # 모듈이 받는 공용 서비스 묶음. 모듈은 이것만 알고 server.py 를 알지 못한다.
+    ctx = ModuleContext(
+        config=state.config,
+        engines=state.engines,
+        profiles=state.profiles,
+        providers=state.providers,
+        translator=state.translator,
+        speech=state.speech,
+        voiceprints=state.voiceprints,
+        speaker_engine=state.speaker_engine,
+        auth=auth,
+        ws_authorized=lambda ws: _ws_authorized(state, ws),
+        reload_if_changed=state.reload_if_changed,
+    )
+    modules.extend(moduleapi.build(ctx))
+    app.state.modules = modules
 
     # ---- 상태 -------------------------------------------------------------
 
@@ -186,7 +224,7 @@ def create_app() -> FastAPI:
         c = state.config
         # 표시 언어 우선순위: ?locale= > Accept-Language > 기본어(en)
         want_locale = normalize_locale(locale or request.headers.get("accept-language"))
-        return {
+        body = {
             "server_id": c.get("server.id"),
             "locale": want_locale,
             "session": {
@@ -219,12 +257,6 @@ def create_app() -> FastAPI:
                 "stt_sample_rate": c.get("audio.stt_sample_rate"),
                 "stt_channels": c.get("audio.stt_channels"),
                 "tts_response_format": c.get("audio.tts_response_format"),
-            },
-            # WebSocket 스트리밍. 클라이언트는 이 값들로 마이크 캡처 규격을 맞춘다.
-            "stream": {
-                "path": c.get("stream.path"),
-                "input_format": c.get("stream.input_format"),
-                "client_frame_ms": c.get("stream.client_frame_ms"),
             },
             "vad": {
                 "backend": c.get("vad.backend"),
@@ -261,85 +293,14 @@ def create_app() -> FastAPI:
                 "default_input_mode": c.get("client.default_input_mode"),
             },
         }
-
-    @app.post(
-        "/v1/translate/audio",
-        summary="Speech → translated speech (batch/PTT)",
-        dependencies=[auth],
-    )
-    async def translate_audio(
-        file: UploadFile = File(..., description="Audio file (wav/mp3/webm/m4a, etc.)"),
-        source_lang: str = Form(...),
-        target_lang: str = Form(...),
-        profile: str | None = Form(None, description="Session profile. Defaults if omitted"),
-        mode: str | None = Form(None),
-        speaker: str | None = Form(None, description="Participant id of the speaker"),
-        stt_engine: str | None = Form(None),
-        tts_engine: str | None = Form(None),
-        voice: str | None = Form(None),
-        speed: float | None = Form(None),
-        response_format: str | None = Form(None),
-        provider: str | None = Form(None),
-        model: str | None = Form(None),
-        style: str | None = Form(None),
-        with_audio: bool = Form(True, description="If False, text only (TTS skipped)"),
-        response_mode: str | None = Form(None, description="json | binary"),
-    ):
-        state.reload_if_changed()
-        c = state.config
-
-        try:
-            session = state.profiles.create(
-                profile=profile, mode=mode, source_lang=source_lang, target_lang=target_lang
+        # 모듈 기여. 각 모듈이 자기 섹션을 싣는다 — 그래야 모듈의 클라이언트 UI 도
+        # 이 응답만 보고 그려진다. 키가 core 와 겹치면 여기서 죽는다.
+        body.update(
+            moduleapi.config_sections(
+                modules, want_locale, reserved={k: "core" for k in body}
             )
-        except SessionError as exc:
-            raise HTTPException(400, str(exc)) from exc
-
-        audio = await file.read()
-        if not audio:
-            raise HTTPException(400, "Empty audio")
-        limit = int(c.get("server.max_upload_bytes"))
-        if len(audio) > limit:
-            raise HTTPException(413, f"Audio is too large ({len(audio)} > {limit} bytes)")
-
-        # 배경 음성 게이트. 옆에서 TV 가 나오는 환경에서 사용자가 말을 쉬는 구간이
-        # STT 로 넘어가 그대로 받아적히는 것을 막는다. 핸즈프리(WS)도 같은 구현을 쓴다.
-        # 꺼져 있으면 바이트가 손대지 않은 채 그대로 지나간다.
-        audio, filename, content_type, gate_metrics = await preprocess.filter_upload(
-            c,
-            audio,
-            file.filename or c.get("audio.pcm_filename"),
-            file.content_type or "application/octet-stream",
         )
-
-        try:
-            result = await state.pipeline.run_audio(
-                session,
-                audio=audio,
-                filename=filename,
-                content_type=content_type,
-                speaker_hint=speaker,
-                stt_engine=stt_engine,
-                tts_engine=tts_engine,
-                voice=voice,
-                speed=float(speed if speed is not None else c.get("audio.tts_speed")),
-                response_format=response_format or c.get("audio.tts_response_format"),
-                provider=provider,
-                model=model,
-                style=style,
-                with_audio=with_audio,
-            )
-        except (SessionError, SpeakerIdError) as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except (EngineError, LLMError) as exc:
-            raise HTTPException(502, str(exc)) from exc
-        except RegistryError as exc:
-            raise HTTPException(500, str(exc)) from exc
-
-        # 게이트가 얼마나 잘라냈는지는 응답의 metrics 로 나간다. 튜닝의 근거다.
-        result.metrics.update(gate_metrics)
-
-        return _segment_response(c, result, response_mode)
+        return body
 
     @app.get(
         "/v1/models",
@@ -354,113 +315,12 @@ def create_app() -> FastAPI:
         except LLMError as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    @app.post(
-        "/v1/translate/text",
-        summary="Text translation (without STT/TTS)",
-        dependencies=[auth],
-    )
-    async def translate_text(req: TextTranslateRequest):
-        """
-        Text in, translated text out — and translated speech too when `with_audio` is set.
-
-        Without `with_audio` this exercises the LLM layer alone and returns just the
-        translation. With it, the request goes through the session and participant
-        model exactly like `/v1/translate/audio` does, so the answer carries `from`
-        and `to` and can be spoken. That is the path for a client that runs speech
-        recognition on the device and wants the server to do the speaking.
-        """
-        state.reload_if_changed()
-        c = state.config
-        context = [Turn(source=t.source, target=t.target) for t in (req.context or [])]
-
-        if req.with_audio:
-            # 스트리밍 응답은 토큰을 그대로 흘려보내는 본문이라 오디오를 실을 자리가 없다.
-            # 번역이 끝난 뒤에 합성하면 클라이언트는 이미 본문을 다 받은 뒤다. 조용히
-            # 한쪽을 무시하는 대신 요청을 거절한다 — 소리를 내며 흘려보내는 경로는 WS 다.
-            if req.stream:
-                raise HTTPException(
-                    400,
-                    "stream and with_audio cannot be combined: a streamed response is a "
-                    f"plain token stream with nowhere to put the audio. Use the WebSocket "
-                    f"endpoint ({c.get('stream.path')}) for streamed speech, or drop one "
-                    f"of the two",
-                )
-            try:
-                session = state.profiles.create(
-                    profile=req.profile,
-                    mode=req.mode,
-                    source_lang=req.source_lang,
-                    target_lang=req.target_lang,
-                )
-            except SessionError as exc:
-                raise HTTPException(400, str(exc)) from exc
-
-            # 합성까지 하는 경로에만 길이 상한을 건다. 오디오 업로드에 상한이 있는 것과
-            # 같은 이유(TTS 엔진을 붙잡는 시간)이고, 기존 텍스트 전용 경로의 동작은
-            # 건드리지 않기 위해서다.
-            limit = int(c.get("limits.max_input_chars"))
-            if len(req.text) > limit:
-                raise HTTPException(413, f"Text is too long ({len(req.text)} > {limit} chars)")
-
-            try:
-                result = await state.pipeline.run_text(
-                    session,
-                    text=req.text,
-                    speaker_hint=req.speaker,
-                    tts_engine=req.tts_engine,
-                    voice=req.voice,
-                    speed=float(req.speed if req.speed is not None else c.get("audio.tts_speed")),
-                    response_format=req.response_format or c.get("audio.tts_response_format"),
-                    provider=req.provider,
-                    model=req.model,
-                    style=req.style,
-                    context=context,
-                    glossary=req.glossary,
-                    with_audio=True,
-                )
-            except (SessionError, SpeakerIdError) as exc:
-                raise HTTPException(400, str(exc)) from exc
-            except (EngineError, LLMError) as exc:
-                raise HTTPException(502, str(exc)) from exc
-            except RegistryError as exc:
-                raise HTTPException(500, str(exc)) from exc
-
-            return _segment_response(c, result, req.response_mode)
-
-        kwargs = dict(
-            source_lang=req.source_lang,
-            target_lang=req.target_lang,
-            provider=req.provider,
-            model=req.model,
-            style=req.style,
-            context=context,
-            glossary=req.glossary,
-        )
-        try:
-            if req.stream:
-                async def gen():
-                    async for piece in state.translator.stream(req.text, **kwargs):
-                        yield piece
-                return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
-
-            started = asyncio.get_running_loop().time()
-            text = await state.translator.translate(req.text, **kwargs)
-            elapsed = asyncio.get_running_loop().time() - started
-            return {
-                "text": text,
-                "source_lang": req.source_lang,
-                "target_lang": req.target_lang,
-                "provider": req.provider or state.config.get("llm.default_provider"),
-                "model": req.model,
-                "elapsed_s": round(elapsed, 3),
-            }
-        except LLMError as exc:
-            raise HTTPException(502, str(exc)) from exc
-
     # ---- 음성 등록 (voice print) --------------------------------------------
     #
+    # 어느 모듈이든 화자를 알아야 할 수 있으므로 core 에 둔다.
+    #
     # ★ 여기서 만들어지는 임베딩은 생체정보에 준하는 개인정보다. 목록 응답에는
-    #   절대 벡터를 싣지 않는다 (app/voiceprints.py 의 주석을 볼 것).
+    #   절대 벡터를 싣지 않는다 (app/core/voiceprints.py 의 주석을 볼 것).
 
     @app.get("/v1/speakers", summary="Enrolled voice prints", dependencies=[auth])
     async def list_speakers() -> dict:
@@ -587,26 +447,6 @@ def create_app() -> FastAPI:
             raise HTTPException(404, f"No voice print is enrolled for '{speaker_id}'")
         return {"deleted": speaker_id, "enrolled": state.voiceprints.count()}
 
-    # ---- 실시간 스트림 ------------------------------------------------------
-    #
-    # 경로도 설정에서 온다. 데코레이터가 기동 시점에 한 번 평가되므로
-    # 경로를 바꾸려면 재기동이 필요하다 — 그 점만 다른 설정과 다르다.
-    @app.websocket(cfg.get("stream.path"))
-    async def stream(ws: WebSocket) -> None:
-        """
-        Audio in (PCM16 binary frames), translated audio + text out.
-
-        Server-side VAD cuts the stream into segments, so the client does not
-        have to decide when an utterance ended. See DESIGN.md for the protocol.
-        """
-        if not _ws_authorized(state, ws):
-            # 정책상 accept 전에 거절한다. 핸드셰이크 단계에서 끊어야
-            # 브라우저가 "인증 실패"를 열린 연결의 오류로 착각하지 않는다.
-            await ws.close(code=int(state.config.get("stream.unauthorized_close_code")))
-            return
-        state.reload_if_changed()
-        await StreamHandler(ws, state).run()
-
     @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:
         state.config.reload()
@@ -623,84 +463,16 @@ def create_app() -> FastAPI:
         state.profiles.load()
         return {"status": "applied", "keys": sorted(patch)}
 
-    return app
-
-
-class ContextTurn(BaseModel):
-    source: str
-    target: str
-
-
-class TextTranslateRequest(BaseModel):
-    # FastAPI 가 이 docstring 을 OpenAPI 스키마 설명으로 노출하므로 영어로 쓴다.
-    """Translation direction is decided by the request. No language-pair constant in code."""
-
-    text: str = Field(..., description="Source text to translate")
-    source_lang: str = Field(..., description="Source language (e.g. ko)")
-    target_lang: str = Field(..., description="Target language (e.g. en)")
-    provider: str | None = Field(None, description="Defaults to llm.default_provider if omitted")
-    model: str | None = Field(
-        None, description="Defaults to the provider's default_model if omitted"
-    )
-    style: str | None = Field(None, description="A key of prompts.styles")
-    context: list[ContextTurn] | None = Field(None, description="Preceding conversation turns")
-    glossary: dict[str, str] | None = Field(
-        None, description="Glossary (source term → translated term)"
-    )
-    stream: bool = False
-
-    # --- 번역문을 소리로도 받을 때 (기기 STT + 서버 TTS) ---
+    # ---- 기능 모듈 ---------------------------------------------------------
     #
-    # 기본값이 False 인 것은 이 엔드포인트의 원래 계약이 "텍스트만"이기 때문이다.
-    # 켜면 세션·참여자 모델을 지나므로 응답이 /v1/translate/audio 와 같은 모양이 된다.
-    with_audio: bool = Field(
-        False,
-        description=(
-            "Also synthesize the translation. The response then looks like "
-            "/v1/translate/audio (deliveries with from/to). Cannot be used with stream"
-        ),
-    )
-    profile: str | None = Field(None, description="Session profile. Defaults if omitted")
-    mode: str | None = Field(None, description="Session mode used to route the engines")
-    speaker: str | None = Field(None, description="Participant id of the speaker")
-    tts_engine: str | None = Field(None, description="Defaults to the routing policy's choice")
-    voice: str | None = Field(None, description="Defaults to the engine's own default voice")
-    speed: float | None = Field(None, description="Defaults to audio.tts_speed")
-    response_format: str | None = Field(None, description="Defaults to audio.tts_response_format")
-    response_mode: str | None = Field(None, description="json | binary")
+    # 목록이 여기 없다는 것이 요점이다. 폴더를 넣으면 붙고, 빼면 떨어진다.
+    for mod in modules:
+        router = mod.routes()
+        if router is not None:
+            app.include_router(router)
+            log.info("Module '%s' mounted %d route(s)", mod.name, len(router.routes))
 
-
-def _segment_response(cfg: Config, result, response_mode: str | None):
-    """
-    세그먼트 결과를 HTTP 응답으로. 오디오·텍스트 두 입구가 같은 규칙으로 답한다.
-
-    두 엔드포인트가 응답 모양을 따로 정하면 클라이언트가 입구마다 다른 파서를
-    갖게 된다. 규칙은 한 곳에만 둔다.
-    """
-    wants = response_mode or cfg.get("audio.response_mode")
-    audible = [d for d in result.deliveries if d.audio]
-
-    # 수신자가 하나뿐이고 오디오가 있으면 바이트를 그대로 돌려줄 수 있다.
-    if wants == "binary" and len(audible) == 1:
-        d = audible[0]
-        return Response(
-            content=d.audio,
-            media_type=d.content_type or "application/octet-stream",
-            headers={
-                "X-Segment": str(result.seg),
-                "X-From": result.speaker,
-                "X-To": d.to,
-                "X-Source-Text": quote(result.source_text),
-                "X-Target-Text": quote(d.text),
-                "X-Total-Ms": str(result.metrics.get("total_ms", "")),
-            },
-        )
-
-    body = result.meta()
-    for meta, delivery in zip(body["deliveries"], result.deliveries):
-        if delivery.audio:
-            meta["audio_base64"] = base64.b64encode(delivery.audio).decode("ascii")
-    return JSONResponse(body)
+    return app
 
 
 def _token_of(headers, query, param: str) -> str:

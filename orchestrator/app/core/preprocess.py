@@ -4,10 +4,10 @@
 두 경로가 같은 오디오 문제를 겪는다.
 
     PTT(HTTP)   POST /v1/translate/audio 로 올라온 파일 (webm/mp3/wav/…)
-    핸즈프리(WS) streaming.py 가 VAD 로 잘라낸 세그먼트 (이미 PCM)
+    핸즈프리(WS) modules/translate/streaming.py 가 VAD 로 잘라낸 세그먼트 (이미 PCM)
 
 문제는 같고 해법도 같아야 하므로 **필터 구현은 한 벌만 둔다**
-(`app/adapters/audio_filter/`). 이 모듈은 그 한 벌을 두 경로에 물리는 얇은 층이다.
+(`app/core/adapters/audio_filter/`). 이 모듈은 그 한 벌을 두 경로에 물리는 얇은 층이다.
 차이는 표현 형식뿐이라 진입점을 둘로 나눠 둔다.
 
     filter_pcm()      int16 PCM 을 이미 들고 있는 쪽(WS)

@@ -20,7 +20,7 @@ from .adapters.speaker_id._base import SPEAKER_ID_KIND
 from .config import Config, ConfigError
 from .i18n import localize
 
-# 프로필 자리표시자는 {{name}} 이다. config.py 의 환경변수 치환(${VAR})과 겹치지 않게
+# 프로필 자리표시자는 {{name}} 이다. core/config.py 의 환경변수 치환(${VAR})과 겹치지 않게
 # 일부러 다른 문법을 쓴다 — 겹치면 환경변수 치환이 먼저 빈 문자열로 지워버린다.
 _VAR = re.compile(r"\{\{([a-z_]+)\}\}")
 

@@ -1,6 +1,10 @@
 """
 번역 파이프라인 — STT → (화자 식별) → LLM → TTS.
 
+**흐름만 여기 있다.** 화자 식별·STT·TTS 를 실제로 부르는 일은 `core/speech.py` 가 한다 —
+문서 음성화·외국어 학습·음성 대화도 같은 단계를 쓰기 때문이다. 이 파일에 남은 것은
+번역에만 있는 것들이다: 원문을 확정하는 두 입구, 수신자별 fan-out, 그때의 metrics.
+
 입력이 오디오냐 텍스트냐
 ------------------------
 들어오는 것만 다르고 뒷부분은 같다. 그래서 흐름을 둘로 나누지 않고 **앞부분만** 나눈다.
@@ -37,18 +41,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from . import enginecall
-from .adapters.speaker_id._base import IdentifyContext, Utterance, identify
-from .config import Config
-from .engines import Engine, EngineRegistry
-from .llm import Translator, Turn
-from .sessions import Session
-from .voiceprints import SessionVoices, SpeakerEngine, VoicePrintStore
+from ...core.engines import Engine
+from ...core.llm import Translator, Turn
+from ...core.sessions import Session
+from ...core.speech import STT_KIND, TTS_KIND, SpeechService
+from ...core.voiceprints import SessionVoices
 
 log = logging.getLogger("pipeline")
-
-STT_KIND = "stt"
-TTS_KIND = "tts"
 
 # 단계가 끝날 때마다 부르는 콜백. WS 스트림이 결과를 기다리지 않고 흘려보내는 통로다.
 #   progress(stage, payload)
@@ -129,60 +128,17 @@ class SegmentResult:
 
 
 class Pipeline:
-    def __init__(
-        self,
-        cfg: Config,
-        engines: EngineRegistry,
-        translator: Translator,
-        voiceprints: VoicePrintStore,
-        speaker_engine: SpeakerEngine,
-    ):
-        self._cfg = cfg
-        self._engines = engines
+    """
+    번역 고유의 흐름만 갖는다.
+
+    STT·TTS 호출과 화자 식별은 `core/speech.py` 에 있다 — 다른 기능도 쓰는 단계라서다.
+    여기 남은 것은 번역에만 있는 것들이다: 원문 확정(run_audio/run_text), 수신자별
+    fan-out(_deliver), 그 과정의 metrics 와 progress 이벤트.
+    """
+
+    def __init__(self, speech: SpeechService, translator: Translator):
+        self._speech = speech
         self._translator = translator
-        self._voiceprints = voiceprints
-        self._speaker_engine = speaker_engine
-
-    # ---- 엔진 선택 / 어댑터 생성 -------------------------------------------
-
-    def _pick(self, kind: str, mode: str, requested: str | None) -> Engine:
-        return enginecall.pick(self._cfg, self._engines, kind=kind, mode=mode, requested=requested)
-
-    def _adapter(self, engine: Engine):
-        return enginecall.adapter(self._cfg, engine)
-
-    def _target(self, engine: Engine) -> tuple[str, str]:
-        return enginecall.target(self._engines, engine)
-
-    # ---- 단계 --------------------------------------------------------------
-
-    async def _transcribe(
-        self, engine: Engine, audio: bytes, filename: str, content_type: str, language: str | None
-    ) -> dict:
-        url, key = self._target(engine)
-        return await self._adapter(engine).transcribe(
-            url=url,
-            api_key=key,
-            audio=audio,
-            filename=filename,
-            content_type=content_type,
-            language=language,
-        )
-
-    async def _synthesize(
-        self, engine: Engine, text: str, *, voice: str | None, language: str, speed: float,
-        response_format: str,
-    ) -> dict:
-        url, key = self._target(engine)
-        return await self._adapter(engine).synthesize(
-            url=url,
-            api_key=key,
-            text=text,
-            voice=voice,
-            language=language,
-            speed=speed,
-            response_format=response_format,
-        )
 
     # ---- 전체 흐름 ---------------------------------------------------------
 
@@ -222,19 +178,14 @@ class Pipeline:
         # 오디오를 그대로 넘긴다 — voice_print 처럼 목소리를 들어야 하는 구현이 있고,
         # STT 가 받는 것과 같은 바이트를 써야 둘의 판단이 어긋나지 않는다.
         # 구현이 코루틴이면 await, 아니면 그대로 부른다 (identify() 가 흡수한다).
-        decision = await identify(
+        decision = await self._speech.identify(
             session.speaker_id,
             [p.as_dict() for p in session.participants],
+            mode=session.mode,
             hint=speaker_hint,
-            audio=Utterance(data=audio, filename=filename, content_type=content_type),
+            audio=self._speech.utterance(audio, filename, content_type),
             text=None,
-            ctx=IdentifyContext(
-                config=self._cfg,
-                engine=self._speaker_engine,
-                store=self._voiceprints,
-                voices=voices,
-                mode=session.mode,
-            ),
+            voices=voices,
         )
         metrics.update(decision.detail)
 
@@ -256,17 +207,17 @@ class Pipeline:
         speaker = session.by_id(speaker_id)
 
         # 2) STT — 발화자의 언어로 인식한다
-        stt = self._pick(STT_KIND, session.mode, stt_engine)
+        stt = self._speech.pick(STT_KIND, session.mode, stt_engine)
         t0 = loop.time()
-        heard = await self._transcribe(stt, audio, filename, content_type, speaker.lang)
+        heard = await self._speech.transcribe(stt, audio, filename, content_type, speaker.lang)
         metrics["stt_ms"] = round((loop.time() - t0) * 1000)
-        metrics["audio_duration_s"] = heard.get("duration")
+        metrics["audio_duration_s"] = heard.duration
 
-        source_text = heard["text"]
+        source_text = heard.text
         result = SegmentResult(
             seg=seg,
             speaker=speaker_id,
-            source_lang=heard.get("language") or speaker.lang,
+            source_lang=heard.language or speaker.lang,
             source_text=source_text,
             metrics=metrics,
             engines={"stt": stt.id},
@@ -337,19 +288,14 @@ class Pipeline:
         # 1) 발화자 결정. 오디오가 없으므로 텍스트만 넘긴다 — 목소리를 들어야 하는
         # 구현(voice_print)은 "판정 못 함"으로 떨어지고 정책이 그것을 처리한다.
         # 여기서 구현별로 분기하지 않는 것이 요점이다.
-        decision = await identify(
+        decision = await self._speech.identify(
             session.speaker_id,
             [p.as_dict() for p in session.participants],
+            mode=session.mode,
             hint=speaker_hint,
             audio=None,
             text=text,
-            ctx=IdentifyContext(
-                config=self._cfg,
-                engine=self._speaker_engine,
-                store=self._voiceprints,
-                voices=voices,
-                mode=session.mode,
-            ),
+            voices=voices,
         )
         metrics.update(decision.detail)
 
@@ -427,7 +373,7 @@ class Pipeline:
         listeners = session.listeners_of(speaker_id)
         tts: Engine | None = None
         if out.with_audio:
-            tts = self._pick(TTS_KIND, session.mode, out.tts_engine)
+            tts = self._speech.pick(TTS_KIND, session.mode, out.tts_engine)
             result.engines["tts"] = tts.id
 
         for listener in listeners:
@@ -456,7 +402,7 @@ class Pipeline:
             # TTS — 수신자의 언어로 합성
             if tts is not None and translated:
                 t0 = loop.time()
-                spoken = await self._synthesize(
+                spoken = await self._speech.synthesize(
                     tts,
                     translated,
                     voice=out.voice,
@@ -465,10 +411,10 @@ class Pipeline:
                     response_format=out.response_format,
                 )
                 metrics[f"tts_ms.{listener.id}"] = round((loop.time() - t0) * 1000)
-                delivery.audio = spoken["audio"]
-                delivery.content_type = spoken["content_type"]
-                delivery.sample_rate = spoken["sample_rate"]
-                delivery.duration = spoken["duration"]
+                delivery.audio = spoken.audio
+                delivery.content_type = spoken.content_type
+                delivery.sample_rate = spoken.sample_rate
+                delivery.duration = spoken.duration
 
             result.deliveries.append(delivery)
             # 지금은 세그먼트 하나에 청크가 하나다(배치 TTS). 2단계에서 스트리밍 TTS 가
