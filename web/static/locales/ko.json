@@ -70,7 +70,7 @@
   "speakers.store_error": "목소리 저장소를 쓸 수 없습니다: {message}",
 
   "speakers.participants": "“{profile}” 에서 말하는 자리는 {ids} 입니다. 목소리는 그 사람의 자리 id 로 등록하세요 — 등록한 id 와 참여자 id 가 같아야 서버가 대조합니다.",
-  "speakers.participants.unknown": "“{profile}” 의 참여자 id 를 서버에 물어보지 못했습니다. 직접 입력하세요 — 참여자 id 와 정확히 같아야 대조됩니다.",
+  "speakers.participants.unknown": "서버가 “{profile}” 의 참여자 id 를 알려주지 않았습니다. 직접 입력하세요 — 참여자 id 와 정확히 같아야 대조됩니다.",
   "speakers.participant": "{id} · {lang} 로 말함",
 
   "speakers.field.speaker": "누구의 목소리인가",

@@ -1,6 +1,17 @@
 """
 번역 파이프라인 — STT → (화자 식별) → LLM → TTS.
 
+입력이 오디오냐 텍스트냐
+------------------------
+들어오는 것만 다르고 뒷부분은 같다. 그래서 흐름을 둘로 나누지 않고 **앞부분만** 나눈다.
+
+    run_audio()  화자 식별 → STT ─┐
+                                  ├─▶ _deliver()  수신자별 번역 → TTS
+    run_text()   화자 식별 ───────┘
+
+`_deliver()` 가 유일한 번역·합성 경로다. 온디바이스 STT 를 쓰는 클라이언트가
+텍스트를 보내도 같은 규칙(방향 계산, from/to, metrics, progress 이벤트)이 적용된다.
+
 1단계는 배치/PTT 이지만 구조는 최종 목표(실시간 양방향)에 맞춰져 있다.
 
   - 세션은 참여자 목록을 갖고, 번역 방향은 **발화자 언어 → 수신자 언어**로 계산된다.
@@ -72,6 +83,27 @@ class Delivery:
             "duration": self.duration,
             "audio_bytes": len(self.audio) if self.audio else 0,
         }
+
+
+@dataclass
+class Outputs:
+    """
+    번역·합성 단계가 요청에서 받는 값들.
+
+    입력 경로(오디오/텍스트)가 늘어도 이 묶음은 그대로다. 뒷단이 필요로 하는 것을
+    한 곳에 모아 두면 새 입력 경로를 붙일 때 인자 목록을 다시 베끼지 않아도 된다.
+    """
+
+    speed: float
+    response_format: str
+    tts_engine: str | None = None
+    voice: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    style: str | None = None
+    context: list[Turn] | None = None
+    glossary: dict[str, str] | None = None
+    with_audio: bool = True
 
 
 @dataclass
@@ -252,24 +284,163 @@ class Pipeline:
             metrics["total_ms"] = round((loop.time() - started) * 1000)
             return result
 
-        # 3) 수신자별로 번역 — 방향은 여기서 계산된다
+        # 3~4) 번역과 합성. 텍스트로 시작하는 경로와 공유한다.
+        out = Outputs(
+            speed=speed,
+            response_format=response_format,
+            tts_engine=tts_engine,
+            voice=voice,
+            provider=provider,
+            model=model,
+            style=style,
+            context=context,
+            glossary=glossary,
+            with_audio=with_audio,
+        )
+        return await self._deliver(session, result, out, emit=emit, started=started)
+
+    async def run_text(
+        self,
+        session: Session,
+        *,
+        text: str,
+        seg: int = 1,
+        speaker_hint: str | None = None,
+        tts_engine: str | None = None,
+        voice: str | None = None,
+        speed: float,
+        response_format: str,
+        provider: str | None = None,
+        model: str | None = None,
+        style: str | None = None,
+        context: list[Turn] | None = None,
+        glossary: dict[str, str] | None = None,
+        with_audio: bool = True,
+        progress: Progress | None = None,
+        voices: SessionVoices | None = None,
+    ) -> SegmentResult:
+        """
+        이미 텍스트인 발화를 처리한다 — 기기에서 STT 를 돌린 클라이언트의 입구다.
+
+        run_audio() 에서 STT 단계만 빠졌을 뿐, 화자 결정도 번역 방향 계산도
+        같은 코드를 지난다. 원문 언어는 STT 가 알려주지 않으므로 발화자 참여자의
+        언어를 그대로 쓴다 (세션이 정한 값이다).
+        """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        metrics: dict[str, Any] = {}
+
+        async def emit(stage: str, payload: dict) -> None:
+            if progress is not None:
+                await progress(stage, payload)
+
+        # 1) 발화자 결정. 오디오가 없으므로 텍스트만 넘긴다 — 목소리를 들어야 하는
+        # 구현(voice_print)은 "판정 못 함"으로 떨어지고 정책이 그것을 처리한다.
+        # 여기서 구현별로 분기하지 않는 것이 요점이다.
+        decision = await identify(
+            session.speaker_id,
+            [p.as_dict() for p in session.participants],
+            hint=speaker_hint,
+            audio=None,
+            text=text,
+            ctx=IdentifyContext(
+                config=self._cfg,
+                engine=self._speaker_engine,
+                store=self._voiceprints,
+                voices=voices,
+                mode=session.mode,
+            ),
+        )
+        metrics.update(decision.detail)
+
+        if decision.speaker is None:
+            reason = decision.reason or "speaker not identified"
+            metrics["skipped"] = reason
+            metrics["total_ms"] = round((loop.time() - started) * 1000)
+            await emit("speaker.rejected", {"seg": seg, "reason": reason, **decision.detail})
+            log.info("Segment %s skipped — %s", seg, reason)
+            return SegmentResult(
+                seg=seg, speaker="", source_lang="", source_text="", metrics=metrics
+            )
+
+        speaker_id = decision.speaker
+        speaker = session.by_id(speaker_id)
+        source_text = text.strip()
+
+        result = SegmentResult(
+            seg=seg,
+            speaker=speaker_id,
+            source_lang=speaker.lang,
+            source_text=source_text,
+            metrics=metrics,
+            engines={},
+        )
+        # STT 를 거치지 않았을 뿐 "원문이 확정됐다"는 같은 사건이다. 같은 stage 를 쓴다.
+        await emit("stt.final", {
+            "seg": seg,
+            "from": speaker_id,
+            "lang": result.source_lang,
+            "text": source_text,
+        })
+
+        if not source_text:
+            metrics["skipped"] = "no text recognized"
+            metrics["total_ms"] = round((loop.time() - started) * 1000)
+            return result
+
+        out = Outputs(
+            speed=speed,
+            response_format=response_format,
+            tts_engine=tts_engine,
+            voice=voice,
+            provider=provider,
+            model=model,
+            style=style,
+            context=context,
+            glossary=glossary,
+            with_audio=with_audio,
+        )
+        return await self._deliver(session, result, out, emit=emit, started=started)
+
+    async def _deliver(
+        self,
+        session: Session,
+        result: SegmentResult,
+        out: Outputs,
+        *,
+        emit: Progress,
+        started: float,
+    ) -> SegmentResult:
+        """
+        확정된 원문을 수신자별로 번역하고, 필요하면 수신자의 언어로 합성한다.
+
+        **번역·합성이 일어나는 유일한 곳이다.** 오디오로 들어왔든 텍스트로 들어왔든
+        여기서부터는 구분이 없다 — 입력 경로가 늘어도 방향 계산·from/to·metrics·
+        progress 이벤트가 갈리지 않게 하기 위해서다.
+        """
+        loop = asyncio.get_running_loop()
+        metrics = result.metrics
+        seg = result.seg
+        speaker_id = result.speaker
+
+        # 번역 방향은 여기서 계산된다 — 발화자의 output 이 곧 수신자다
         listeners = session.listeners_of(speaker_id)
         tts: Engine | None = None
-        if with_audio:
-            tts = self._pick(TTS_KIND, session.mode, tts_engine)
+        if out.with_audio:
+            tts = self._pick(TTS_KIND, session.mode, out.tts_engine)
             result.engines["tts"] = tts.id
 
         for listener in listeners:
             t0 = loop.time()
             translated = await self._translator.translate(
-                source_text,
+                result.source_text,
                 source_lang=result.source_lang,
                 target_lang=listener.lang,
-                provider=provider,
-                model=model,
-                style=style,
-                context=context,
-                glossary=glossary,
+                provider=out.provider,
+                model=out.model,
+                style=out.style,
+                context=out.context,
+                glossary=out.glossary,
             )
             metrics[f"llm_ms.{listener.id}"] = round((loop.time() - t0) * 1000)
 
@@ -282,16 +453,16 @@ class Pipeline:
                 "text": translated,
             })
 
-            # 4) TTS — 수신자의 언어로 합성
-            if with_audio and tts is not None and translated:
+            # TTS — 수신자의 언어로 합성
+            if tts is not None and translated:
                 t0 = loop.time()
                 spoken = await self._synthesize(
                     tts,
                     translated,
-                    voice=voice,
+                    voice=out.voice,
                     language=listener.lang,
-                    speed=speed,
-                    response_format=response_format,
+                    speed=out.speed,
+                    response_format=out.response_format,
                 )
                 metrics[f"tts_ms.{listener.id}"] = round((loop.time() - t0) * 1000)
                 delivery.audio = spoken["audio"]

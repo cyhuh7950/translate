@@ -76,6 +76,43 @@ class Session:
         }
 
 
+def _participant_view(spec: dict) -> dict:
+    """
+    참여자 하나를 클라이언트가 읽을 수 있는 모양으로 만든다.
+
+    `lang` 은 프로필에서 `{{source_lang}}` 같은 자리표시자다. /v1/config 는 세션이
+    아니라 "무엇을 고를 수 있는가"를 말하는 자리라 그 값을 채울 언어를 아직 모른다.
+    자리표시자를 그대로 내보내면 클라이언트가 `{{source_lang}}` 을 언어 코드라고
+    믿고 화면에 찍는다. 그래서 **누가 채우는 값인지**를 따로 알려준다.
+
+        lang      프로필이 언어를 고정했을 때의 그 값. 세션이 정하면 null
+        lang_var  그 값을 채울 세션 값의 이름 (source_lang / target_lang).
+                  프로필이 고정했으면 null
+
+    둘 다 null 이면 "이 참여자의 언어는 알 수 없다"는 뜻이고, 클라이언트는 언어를
+    빼고 id 만 보여주면 된다. 이렇게 두면 클라이언트가 `{{}}` 문법을 알 필요가 없고,
+    프로필이 언어를 고정하는 구성(`lang: ko`)도 같은 필드로 표현된다.
+    """
+    raw = spec.get("lang")
+    lang: str | None = None
+    lang_var: str | None = None
+    if isinstance(raw, str):
+        whole = _VAR.fullmatch(raw.strip())
+        if whole:
+            lang_var = whole.group(1)
+        elif not _VAR.search(raw):
+            lang = raw
+        # 자리표시자가 문자열 안에 섞인 경우는 반쯤 채워진 값을 언어 코드라고
+        # 내보내게 되므로 둘 다 비운다 — 모르는 것을 지어내지 않는다.
+    return {
+        "id": spec["id"],
+        "lang": lang,
+        "lang_var": lang_var,
+        "input": bool(spec.get("input", False)),
+        "output": list(spec.get("output") or []),
+    }
+
+
 def _substitute(value: Any, vars_: dict[str, str]) -> Any:
     """프로필의 {{source_lang}} 등을 세션이 넘긴 값으로 치환한다."""
     if isinstance(value, str):
@@ -144,6 +181,9 @@ class ProfileRegistry:
                 "description": localize(spec.get("description"), locale),
                 "speaker_id": spec["speaker_id"],
                 "turn_policy": spec.get("turn_policy"),
+                # 참여자를 그대로 싣는다. 이것이 없으면 클라이언트가 등록용 id 를
+                # 알아내려고 세션을 열어야 한다 — 화면 하나 그리자고 할 일이 아니다.
+                "participants": [_participant_view(p) for p in spec["participants"]],
                 "participant_count": len(spec["participants"]),
                 "bidirectional": sum(1 for p in spec["participants"] if p.get("input")) > 1,
                 "available": reason is None,

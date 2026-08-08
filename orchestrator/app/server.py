@@ -339,30 +339,7 @@ def create_app() -> FastAPI:
         # 게이트가 얼마나 잘라냈는지는 응답의 metrics 로 나간다. 튜닝의 근거다.
         result.metrics.update(gate_metrics)
 
-        wants = response_mode or c.get("audio.response_mode")
-        audible = [d for d in result.deliveries if d.audio]
-
-        # 수신자가 하나뿐이고 오디오가 있으면 바이트를 그대로 돌려줄 수 있다.
-        if wants == "binary" and len(audible) == 1:
-            d = audible[0]
-            return Response(
-                content=d.audio,
-                media_type=d.content_type or "application/octet-stream",
-                headers={
-                    "X-Segment": str(result.seg),
-                    "X-From": result.speaker,
-                    "X-To": d.to,
-                    "X-Source-Text": quote(result.source_text),
-                    "X-Target-Text": quote(d.text),
-                    "X-Total-Ms": str(result.metrics.get("total_ms", "")),
-                },
-            )
-
-        body = result.meta()
-        for meta, delivery in zip(body["deliveries"], result.deliveries):
-            if delivery.audio:
-                meta["audio_base64"] = base64.b64encode(delivery.audio).decode("ascii")
-        return JSONResponse(body)
+        return _segment_response(c, result, response_mode)
 
     @app.get(
         "/v1/models",
@@ -383,9 +360,73 @@ def create_app() -> FastAPI:
         dependencies=[auth],
     )
     async def translate_text(req: TextTranslateRequest):
-        """Use this to exercise the LLM layer alone. The speech pipeline reuses it internally."""
+        """
+        Text in, translated text out — and translated speech too when `with_audio` is set.
+
+        Without `with_audio` this exercises the LLM layer alone and returns just the
+        translation. With it, the request goes through the session and participant
+        model exactly like `/v1/translate/audio` does, so the answer carries `from`
+        and `to` and can be spoken. That is the path for a client that runs speech
+        recognition on the device and wants the server to do the speaking.
+        """
         state.reload_if_changed()
+        c = state.config
         context = [Turn(source=t.source, target=t.target) for t in (req.context or [])]
+
+        if req.with_audio:
+            # 스트리밍 응답은 토큰을 그대로 흘려보내는 본문이라 오디오를 실을 자리가 없다.
+            # 번역이 끝난 뒤에 합성하면 클라이언트는 이미 본문을 다 받은 뒤다. 조용히
+            # 한쪽을 무시하는 대신 요청을 거절한다 — 소리를 내며 흘려보내는 경로는 WS 다.
+            if req.stream:
+                raise HTTPException(
+                    400,
+                    "stream and with_audio cannot be combined: a streamed response is a "
+                    f"plain token stream with nowhere to put the audio. Use the WebSocket "
+                    f"endpoint ({c.get('stream.path')}) for streamed speech, or drop one "
+                    f"of the two",
+                )
+            try:
+                session = state.profiles.create(
+                    profile=req.profile,
+                    mode=req.mode,
+                    source_lang=req.source_lang,
+                    target_lang=req.target_lang,
+                )
+            except SessionError as exc:
+                raise HTTPException(400, str(exc)) from exc
+
+            # 합성까지 하는 경로에만 길이 상한을 건다. 오디오 업로드에 상한이 있는 것과
+            # 같은 이유(TTS 엔진을 붙잡는 시간)이고, 기존 텍스트 전용 경로의 동작은
+            # 건드리지 않기 위해서다.
+            limit = int(c.get("limits.max_input_chars"))
+            if len(req.text) > limit:
+                raise HTTPException(413, f"Text is too long ({len(req.text)} > {limit} chars)")
+
+            try:
+                result = await state.pipeline.run_text(
+                    session,
+                    text=req.text,
+                    speaker_hint=req.speaker,
+                    tts_engine=req.tts_engine,
+                    voice=req.voice,
+                    speed=float(req.speed if req.speed is not None else c.get("audio.tts_speed")),
+                    response_format=req.response_format or c.get("audio.tts_response_format"),
+                    provider=req.provider,
+                    model=req.model,
+                    style=req.style,
+                    context=context,
+                    glossary=req.glossary,
+                    with_audio=True,
+                )
+            except (SessionError, SpeakerIdError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+            except (EngineError, LLMError) as exc:
+                raise HTTPException(502, str(exc)) from exc
+            except RegistryError as exc:
+                raise HTTPException(500, str(exc)) from exc
+
+            return _segment_response(c, result, req.response_mode)
+
         kwargs = dict(
             source_lang=req.source_lang,
             target_lang=req.target_lang,
@@ -607,6 +648,59 @@ class TextTranslateRequest(BaseModel):
         None, description="Glossary (source term → translated term)"
     )
     stream: bool = False
+
+    # --- 번역문을 소리로도 받을 때 (기기 STT + 서버 TTS) ---
+    #
+    # 기본값이 False 인 것은 이 엔드포인트의 원래 계약이 "텍스트만"이기 때문이다.
+    # 켜면 세션·참여자 모델을 지나므로 응답이 /v1/translate/audio 와 같은 모양이 된다.
+    with_audio: bool = Field(
+        False,
+        description=(
+            "Also synthesize the translation. The response then looks like "
+            "/v1/translate/audio (deliveries with from/to). Cannot be used with stream"
+        ),
+    )
+    profile: str | None = Field(None, description="Session profile. Defaults if omitted")
+    mode: str | None = Field(None, description="Session mode used to route the engines")
+    speaker: str | None = Field(None, description="Participant id of the speaker")
+    tts_engine: str | None = Field(None, description="Defaults to the routing policy's choice")
+    voice: str | None = Field(None, description="Defaults to the engine's own default voice")
+    speed: float | None = Field(None, description="Defaults to audio.tts_speed")
+    response_format: str | None = Field(None, description="Defaults to audio.tts_response_format")
+    response_mode: str | None = Field(None, description="json | binary")
+
+
+def _segment_response(cfg: Config, result, response_mode: str | None):
+    """
+    세그먼트 결과를 HTTP 응답으로. 오디오·텍스트 두 입구가 같은 규칙으로 답한다.
+
+    두 엔드포인트가 응답 모양을 따로 정하면 클라이언트가 입구마다 다른 파서를
+    갖게 된다. 규칙은 한 곳에만 둔다.
+    """
+    wants = response_mode or cfg.get("audio.response_mode")
+    audible = [d for d in result.deliveries if d.audio]
+
+    # 수신자가 하나뿐이고 오디오가 있으면 바이트를 그대로 돌려줄 수 있다.
+    if wants == "binary" and len(audible) == 1:
+        d = audible[0]
+        return Response(
+            content=d.audio,
+            media_type=d.content_type or "application/octet-stream",
+            headers={
+                "X-Segment": str(result.seg),
+                "X-From": result.speaker,
+                "X-To": d.to,
+                "X-Source-Text": quote(result.source_text),
+                "X-Target-Text": quote(d.text),
+                "X-Total-Ms": str(result.metrics.get("total_ms", "")),
+            },
+        )
+
+    body = result.meta()
+    for meta, delivery in zip(body["deliveries"], result.deliveries):
+        if delivery.audio:
+            meta["audio_base64"] = base64.b64encode(delivery.audio).decode("ascii")
+    return JSONResponse(body)
 
 
 def _token_of(headers, query, param: str) -> str:

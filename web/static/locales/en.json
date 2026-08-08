@@ -70,7 +70,7 @@
   "speakers.store_error": "The voice store cannot be used: {message}",
 
   "speakers.participants": "“{profile}” gives the speakers these ids: {ids}. Enroll a voice under the id of the person it belongs to — the id you enroll is the id the server matches against.",
-  "speakers.participants.unknown": "Could not ask the server which participant ids “{profile}” uses. Type the id yourself — it has to be exactly the participant id, or the voice will never be matched.",
+  "speakers.participants.unknown": "The server did not say which participant ids “{profile}” uses. Type the id yourself — it has to be exactly the participant id, or the voice will never be matched.",
   "speakers.participant": "{id} · speaks {lang}",
 
   "speakers.field.speaker": "Whose voice is this",

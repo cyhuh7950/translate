@@ -1207,16 +1207,18 @@ defineInputMode(HANDSFREE_MODE, {
  *
  * 여기에도 목록이 없다.
  *   · 정책 목록·임계값·등록 수·저장소 상태는 /v1/config 의 speaker_id 가 준다
- *   · 참여자 id 는 세션을 여는 서버가 준다 (스트림의 ready)
+ *   · 참여자 구성도 /v1/config 의 profiles[].participants 가 준다
  *   · 문구는 locales/*.json 이고, 없는 이름은 서버가 준 코드를 그대로 보여준다
  *
  * ★ 등록 id 는 **참여자 id 와 같아야** 대조가 된다. 프로필이 바뀌면 참여자 id 도
  *   바뀌므로(oneway 는 speaker/listener, twoway_voice 는 a/b), 지금 고른 설정으로
  *   서버가 만들 세션의 참여자를 그대로 보여주고 그 중에서 고르게 한다.
+ *
+ * 참여자를 얻는 길은 둘이고 둘 다 서버가 준 것이다.
+ *   ① /v1/config — 화면을 그리는 평상시. 세션을 열지 않는다
+ *   ② 스트림의 ready — 핸즈프리가 실제로 열렸을 때. 세션을 만든 쪽이 확정한
+ *      값이므로 ① 보다 정확하고, 오면 그것으로 덮어쓴다
  */
-
-// 참여자를 물어보는 짧은 세션의 대기 한도. 프로토콜과 무관한 화면 사정이다.
-const PARTICIPANT_PROBE_MS = 5000;
 
 const spk = {
   clips: [],          // 아직 올리지 않은 녹음/파일 {id, label, filename, blob, url}
@@ -1225,8 +1227,6 @@ const spk = {
   recording: false,
   participants: [],   // 지금 설정으로 열릴 세션의 참여자. 서버가 준 그대로다
   profile: '',        // 그 참여자를 만든 프로필. 서버가 확정한 이름이다
-  probeKey: null,     // 어떤 설정으로 물어본 결과인지
-  probing: false,
   choice: null,       // 등록 대상 참여자 id
   name: '',           // 표시 이름 (비우면 서버가 id 를 쓴다)
   policy: null,       // 관리 영역에서 고른 정책 — 누르기 전에는 적용되지 않는다
@@ -1270,8 +1270,9 @@ function renderSpeakers() {
 
   renderSpeakerState();
   renderPolicyField();
-  renderSpeakerForm();
-  renderSpeakerList();
+  // 참여자는 설정에서 바로 나온다 — 폼을 그리기 전에 계산해 둔다
+  // (refreshParticipants 가 폼과 목록을 함께 다시 그린다).
+  refreshParticipants();
   renderClips();
   enrollButton();
   if (!panel.classList.contains('collapsed')) openSpeakers();
@@ -1300,98 +1301,65 @@ function renderSpeakerState() {
 
 /* ---- 참여자 -------------------------------------------------------------- */
 
-/** 참여자 구성을 정하는 값들. 하나라도 바뀌면 id·언어가 달라진다. */
-function participantKey() {
-  return [
-    state.form.profile || '',
-    state.form.mode || '',
-    state.form.source_lang || '',
-    state.form.target_lang || '',
-  ].join('|');
+/** 지금 고른 프로필. 안 골랐으면 서버 기본값이 쓰인다 — 세션을 만들 때와 같은 규칙이다. */
+function currentProfileId() {
+  const cfg = state.config;
+  if (!cfg) return '';
+  return state.form.profile || (cfg.session && cfg.session.default_profile) || '';
 }
 
 /**
- * 참여자 id 를 서버에 물어본다.
+ * 참여자의 언어. 프로필이 고정했으면 그 값, 세션이 정하는 자리면 지금 고른 값이다.
  *
- * 프로필별 참여자 목록을 클라이언트에 두지 않기 위해서다 — 세션을 만드는 쪽이 곧
- * 정답이므로 스트림을 열어 ready 만 받고 바로 닫는다. 오디오는 한 프레임도 보내지
- * 않으므로 엔진도 마이크도 건드리지 않는다.
+ * 서버가 `lang_var` 로 "이 자리는 source_lang 이 채운다"까지 알려주므로 클라이언트가
+ * `{{...}}` 문법을 알 필요가 없다. 둘 다 없으면 언어를 모르는 것이고, 그때는
+ * 언어 없이 id 만 보여준다 (없는 값을 지어내지 않는다).
  */
-function probeParticipants() {
-  const cfg = state.config;
-  if (!cfg || !cfg.stream || !cfg.stream.path || typeof WebSocket === 'undefined') {
-    return Promise.resolve(null);
-  }
-  return new Promise((resolve) => {
-    let ws = null;
-    let timer = null;
-    try {
-      ws = new WebSocket(streamUrl(cfg.stream.path));
-    } catch (_) {
-      resolve(null);
-      return;
-    }
-    const finish = (value) => {
-      clearTimeout(timer);
-      try { ws.close(); } catch (_) { /* 이미 닫힘 */ }
-      resolve(value);                     // 두 번째부터는 무시된다
-    };
-    timer = setTimeout(() => finish(null), PARTICIPANT_PROBE_MS);
-    ws.addEventListener('open', () => {
-      ws.send(JSON.stringify(hfConfigMessage(Number(cfg.audio.stt_sample_rate))));
-    });
-    ws.addEventListener('message', (event) => {
-      if (typeof event.data !== 'string') return;
-      let msg = null;
-      try { msg = JSON.parse(event.data); } catch (_) { return; }
-      if (msg.type === 'ready') finish(msg);
-      else if (msg.type === 'error') finish(null);
-    });
-    ws.addEventListener('close', () => finish(null));
-    ws.addEventListener('error', () => finish(null));
-  });
+function participantLang(p) {
+  if (p.lang) return p.lang;
+  if (p.lang_var) return state.form[p.lang_var] || '';
+  return '';
 }
 
-/** ready 이벤트에서 참여자를 받아 둔다. 핸즈프리가 열릴 때도 같은 것이 온다. */
+/**
+ * 지금 설정으로 서버가 만들 세션의 참여자.
+ *
+ * /v1/config 의 profiles[].participants 를 그대로 쓴다. 목록도 id 도 서버가 준
+ * 것이고 클라이언트에는 없다. 세션을 열지 않으므로 엔진도 마이크도 건드리지 않는다.
+ */
+function configParticipants() {
+  const cfg = state.config;
+  if (!cfg) return null;
+  const profile = (cfg.profiles || []).find((p) => p.id === currentProfileId());
+  if (!profile || !Array.isArray(profile.participants) || !profile.participants.length) {
+    return null;                     // 서버가 참여자를 안 준다 — 텍스트 입력으로 떨어진다
+  }
+  return profile.participants;
+}
+
+/** ready 이벤트에서 참여자를 받아 둔다. 핸즈프리가 실제로 열릴 때 온다. */
 function adoptParticipants(ready) {
-  spk.participants = ready.participants || [];
+  // 서버가 세션을 만들며 확정한 값이다. 설정에서 유추한 것보다 정확하므로 덮어쓴다.
+  if (!Array.isArray(ready.participants) || !ready.participants.length) return;
+  spk.participants = ready.participants;
   spk.profile = ready.profile || '';   // 서버가 실제로 고른 프로필. 화면의 이름도 이것을 따른다
-  spk.probeKey = participantKey();
   renderSpeakerForm();
   renderSpeakerList();               // "참여자에 없음" 표시가 달라진다
 }
 
-async function refreshParticipants() {
-  const key = participantKey();
-  if (spk.probing || spk.probeKey === key) return;
-  spk.probing = true;
-  spk.probeKey = key;
-  let ready = null;
-  try {
-    ready = await probeParticipants();
-  } finally {
-    spk.probing = false;
-  }
-  if (spk.probeKey !== key) return;   // 그 사이 설정이 또 바뀌었다
-  if (ready) {
-    adoptParticipants(ready);
-    return;
-  }
-  spk.probeKey = null;                // 다음에 다시 물어본다
-  spk.participants = [];
-  spk.profile = '';
+/** 설정에서 참여자를 다시 계산한다. 네트워크를 타지 않으므로 언제 불러도 된다. */
+function refreshParticipants() {
+  const participants = configParticipants();
+  spk.participants = participants || [];
+  spk.profile = participants ? currentProfileId() : '';
   renderSpeakerForm();
   renderSpeakerList();
 }
 
-/** 프로필·언어가 바뀌면 참여자도 바뀐다. 열려 있을 때만 다시 물어본다. */
+/** 프로필·언어가 바뀌면 참여자도 바뀐다. */
 function speakerSettingsChanged() {
   const panel = $('#speakers');
   if (!panel || panel.hidden) return;
-  if (panel.classList.contains('collapsed')) {
-    spk.probeKey = null;              // 다음에 열 때 다시 물어본다
-    return;
-  }
   refreshParticipants();
 }
 
@@ -1400,6 +1368,12 @@ function speakerSettingsChanged() {
 /** 말할 수 있는 참여자만. 듣기만 하는 자리에 목소리를 등록할 이유가 없다. */
 function speakerCandidates() {
   return spk.participants.filter((p) => p.input);
+}
+
+/** 참여자 한 명의 표시 문구. 언어를 모르면 id 만 — id 는 번역할 것이 아니다. */
+function participantLabel(p) {
+  const lang = participantLang(p);
+  return lang ? t('speakers.participant', { id: p.id, lang }) : p.id;
 }
 
 function renderSpeakerForm() {
@@ -1411,7 +1385,7 @@ function renderSpeakerForm() {
   const candidates = speakerCandidates();
   // 참여자를 준 것이 서버이므로 프로필 이름도 서버가 확정한 것을 쓴다. 그래야
   // "이 프로필의 참여자"라는 두 값이 어긋나지 않는다.
-  const profileId = (candidates.length && spk.profile) || state.form.profile || '';
+  const profileId = (candidates.length && spk.profile) || currentProfileId();
   const profile = (state.config.profiles || []).find((p) => p.id === profileId);
   const profileLabel = (profile && profile.label) || profileId;
 
@@ -1419,7 +1393,7 @@ function renderSpeakerForm() {
     // 등록 id 와 참여자 id 가 같은 것이라는 사실을 여기서 드러낸다.
     line.textContent = t('speakers.participants', {
       profile: profileLabel,
-      ids: candidates.map((p) => t('speakers.participant', { id: p.id, lang: p.lang })).join(', '),
+      ids: candidates.map(participantLabel).join(', '),
     });
     if (!candidates.some((p) => p.id === spk.choice)) spk.choice = candidates[0].id;
     addSelect(box, {
@@ -1427,15 +1401,12 @@ function renderSpeakerForm() {
       transient: true,                // 번역 요청에 실리는 값이 아니다
       label: t('speakers.field.speaker'),
       hint: t('speakers.field.speaker.hint'),
-      options: candidates.map((p) => ({
-        value: p.id,
-        label: t('speakers.participant', { id: p.id, lang: p.lang }),
-      })),
+      options: candidates.map((p) => ({ value: p.id, label: participantLabel(p) })),
       value: spk.choice,
       onChange: (value) => { spk.choice = value; },
     });
   } else {
-    // 서버에 물어보지 못했다. 목록을 지어내지 않고 id 를 직접 받는다.
+    // 서버가 참여자를 주지 않았다. 목록을 지어내지 않고 id 를 직접 받는다.
     line.textContent = t('speakers.participants.unknown', { profile: profileLabel });
     addText(box, {
       name: 'speaker_id',
