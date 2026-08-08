@@ -25,6 +25,8 @@
       <span class="sr-only" data-i18n="locale.label">Display language</span>
       <select id="locale-select" aria-label="Display language"></select>
     </label>
+    <button id="speakers-toggle" type="button" class="ghost"
+            data-i18n="speakers.toggle" data-i18n-title="speakers.toggle">Voices</button>
     <button id="settings-toggle" type="button" class="ghost"
             data-i18n="settings.toggle" data-i18n-title="settings.toggle">Settings</button>
   </div>
@@ -36,6 +38,72 @@
     <h2 id="settings-title" data-i18n="section.settings">Settings</h2>
     <div id="settings-fields" class="fields"></div>
     <p id="settings-meta" class="meta"></p>
+  </section>
+
+  <!--
+    화자 등록(voice print). 여기에도 목록이 없다 — 참여자 id 는 서버가 세션을 열며
+    알려주고(스트림의 ready), 정책 목록과 임계값은 /v1/config 의 speaker_id 가 준다.
+    data-no-ptt 는 이 안에서 스페이스바가 PTT 녹음을 건드리지 않게 하는 표시다.
+  -->
+  <section id="speakers" class="panel collapsed" aria-labelledby="speakers-title" data-no-ptt hidden>
+    <div class="panel-head">
+      <h2 id="speakers-title" data-i18n="section.speakers">Voice enrollment</h2>
+    </div>
+
+    <!-- 접혀 있어도 보인다: 등록 수 · 자동 등록 · 현재 정책 -->
+    <p id="speaker-state" class="speaker-state"></p>
+    <p id="speaker-store-error" class="status error" hidden></p>
+
+    <div class="speakers-body">
+      <!-- 참여자 id 안내. 세션 구성이 바뀌면 이 줄이 통째로 바뀐다. -->
+      <p id="speaker-participants" class="participants"></p>
+
+      <div id="speaker-form" class="fields"></div>
+
+      <div class="enroll-row">
+        <button id="enroll-record" type="button" class="ghost"
+                data-i18n="speakers.record">Record a clip</button>
+        <label class="file-label">
+          <input id="enroll-file" type="file" accept="audio/*" multiple>
+          <span data-i18n="speakers.upload">Or add audio files</span>
+        </label>
+      </div>
+      <p class="hint left" data-i18n="speakers.record.hint">
+        A few seconds of ordinary speech. Several clips give a steadier voice print.
+      </p>
+
+      <p id="enroll-clips-title" class="line-label"></p>
+      <ul id="enroll-clips" class="clips"></ul>
+
+      <div class="enroll-row">
+        <button id="enroll-submit" type="button" class="ghost"
+                data-i18n="speakers.submit">Enroll this voice</button>
+        <button id="enroll-clear" type="button" class="ghost small"
+                data-i18n="speakers.clear_clips">Remove all clips</button>
+      </div>
+
+      <p id="enroll-message" class="status" role="status" aria-live="polite"></p>
+
+      <h3 class="subhead" data-i18n="speakers.list">Enrolled voices</h3>
+      <p id="speaker-empty" class="empty" data-i18n="speakers.none">No voice is enrolled yet.</p>
+      <ul id="speaker-list" class="speaker-list"></ul>
+
+      <!--
+        정책은 이 브라우저가 아니라 **서버 전역** 설정이다. 무심코 바뀌지 않게
+        접어 두고, 고른 뒤 따로 누르는 버튼으로만 적용한다.
+      -->
+      <details id="speaker-admin" class="admin">
+        <summary data-i18n="speakers.admin">Server-wide settings (administrator)</summary>
+        <p class="warn" data-i18n="speakers.admin.warning">
+          These belong to the server, not to this browser. Changing them affects everyone using it.
+        </p>
+        <div id="policy-field" class="fields"></div>
+        <p id="policy-desc" class="field-hint"></p>
+        <button id="policy-apply" type="button" class="ghost"
+                data-i18n="speakers.policy.apply">Apply to the server</button>
+        <p id="policy-message" class="status" role="status" aria-live="polite"></p>
+      </details>
+    </div>
   </section>
 
   <section class="panel input" aria-labelledby="input-title">
@@ -107,6 +175,8 @@
       <span class="route"></span>
       <span class="clock"></span>
     </div>
+    <!-- 화자 식별이 이 발화를 처리하지 않기로 했을 때 그 이유가 여기 남는다. -->
+    <p class="skipped" hidden></p>
     <div class="line source">
       <span class="line-label" data-i18n="result.source">Heard</span>
       <p class="text"></p>
@@ -126,6 +196,27 @@
     <p class="text"></p>
     <audio class="player" controls preload="none"></audio>
   </div>
+</template>
+
+<!-- 등록된 목소리 한 줄. 문구는 JS 가 채운다. -->
+<template id="speaker-template">
+  <li class="speaker">
+    <div class="speaker-main">
+      <span class="speaker-name"></span>
+      <span class="speaker-id"></span>
+    </div>
+    <p class="speaker-meta"></p>
+    <button type="button" class="ghost small speaker-delete"></button>
+  </li>
+</template>
+
+<!-- 아직 올리지 않은 녹음/파일 하나. -->
+<template id="clip-template">
+  <li class="clip">
+    <span class="clip-name"></span>
+    <audio class="player" controls preload="none"></audio>
+    <button type="button" class="ghost small clip-remove"></button>
+  </li>
 </template>
 
 <script src="app.js"></script>

@@ -152,6 +152,7 @@ async function loadConfig() {
   setStatus(t('status.ready'));
   renderSettings();
   renderInputModes();
+  renderSpeakers();
 }
 
 function addSelect(parent, spec) {
@@ -209,6 +210,27 @@ function addCheckbox(parent, spec) {
   caption.textContent = spec.label;
   wrap.append(box, caption);
   parent.appendChild(wrap);
+}
+
+function addText(parent, spec) {
+  const wrap = el('label', 'field');
+  const caption = el('span', 'field-label');
+  caption.textContent = spec.label;
+  const input = el('input');
+  input.type = 'text';
+  input.name = spec.name;
+  input.value = spec.value || '';
+  if (spec.placeholder) input.placeholder = spec.placeholder;
+  // 자유 입력은 서버로 나가는 설정이 아니다. 값은 부르는 쪽이 받아 둔다.
+  input.addEventListener('input', () => { if (spec.onChange) spec.onChange(input.value); });
+  wrap.append(caption, input);
+  if (spec.hint) {
+    const hint = el('span', 'field-hint');
+    hint.textContent = spec.hint;
+    wrap.appendChild(hint);
+  }
+  parent.appendChild(wrap);
+  return input;
 }
 
 /** 첫 렌더에서는 서버 기본값을, 이후에는 사용자가 고른 값을 유지한다. */
@@ -390,6 +412,7 @@ function activeInput() {
 function settingsChanged() {
   const impl = activeInput();
   if (impl && impl.settingsChanged) impl.settingsChanged();
+  speakerSettingsChanged();
 }
 
 function showInputPanels(name) {
@@ -523,7 +546,7 @@ defineInputMode(PTT_MODE, {
   },
   exit() {
     stopRecording();
-    releaseMic();
+    releaseMicIfIdle();     // 화자 등록이 녹음 중이면 마이크를 빼앗지 않는다
   },
   refresh() {
     $('.ptt-label').textContent = t(state.recording ? 'ptt.recording' : 'ptt.hold');
@@ -606,6 +629,16 @@ function renderTurn(data) {
   });
   turn.querySelector('.clock').textContent = new Date().toLocaleTimeString(state.locale);
   turn.querySelector('.source .text').textContent = data.source_text || '—';
+
+  // 화자 식별이 이 발화를 처리하지 않기로 했으면 그 사실이 먼저 보여야 한다.
+  // 사유 코드는 metrics.skipped 에 실려 온다 (WS 는 speaker.rejected 로 같은 것을 준다).
+  const skipped = (data.metrics || {}).skipped;
+  if (skipped) {
+    const note = turn.querySelector('.skipped');
+    note.textContent = skippedText(skipped, data.metrics);
+    note.hidden = false;
+    turn.classList.add('is-skipped');
+  }
 
   const box = turn.querySelector('.deliveries');
   let first = true;
@@ -832,7 +865,7 @@ function hfStop() {
     try { ws.close(); } catch (_) { /* 무시 */ }
   }
 
-  releaseMic();
+  releaseMicIfIdle();       // 화자 등록이 녹음 중이면 마이크를 빼앗지 않는다
   hf.turns.clear();
   const bar = $('#hf-level');
   if (bar) bar.style.width = '0%';
@@ -893,6 +926,9 @@ const hfHandlers = {
   ready(msg) {
     hf.ready = true;
     hfState('listening');
+    // 참여자 id 는 세션을 연 서버가 여기서 알려준다. 화자 등록 화면이 쓰는 것과
+    // 같은 값이므로 그대로 받아 둔다 (등록 id 는 이 id 와 같아야 대조가 된다).
+    adoptParticipants(msg);
     // 서버가 확정한 입력 규격. 우리가 선언한 것과 다르면 서버가 오류를 냈을 것이다.
     const audio = msg.audio || {};
     setStatus(t('handsfree.connected', {
@@ -921,6 +957,19 @@ const hfHandlers = {
 
   'llm.delta': (msg) => hfTarget(msg, true),  // 지금은 서버가 보내지 않는다 (2단계)
   'llm.final': (msg) => hfTarget(msg, false),
+
+  // 오류가 아니다. 화자 식별이 이 세그먼트를 처리하지 않기로 한 것이고,
+  // 같은 사유가 뒤따르는 metrics 의 skipped 에도 실린다.
+  'speaker.rejected': (msg) => {
+    const entry = hfTurn(msg.seg);
+    const note = entry.turn.querySelector('.skipped');
+    note.textContent = skippedText(msg.reason, msg);
+    note.hidden = false;
+    entry.turn.classList.add('is-skipped');
+    entry.turn.querySelector('.source .text').textContent = '—';
+    hfRoute(entry);
+    if (!hf.playing) hfState('listening');
+  },
 
   'tts.chunk': (msg) => { hf.pendingChunk = msg; },
 
@@ -1151,6 +1200,572 @@ defineInputMode(HANDSFREE_MODE, {
   },
 });
 
+/* --------------------------------------------------- 화자 등록 (voice print) */
+
+/*
+ * 목소리를 등록해 두면 서버가 "누가 말했는지"를 목소리로 가른다.
+ *
+ * 여기에도 목록이 없다.
+ *   · 정책 목록·임계값·등록 수·저장소 상태는 /v1/config 의 speaker_id 가 준다
+ *   · 참여자 id 는 세션을 여는 서버가 준다 (스트림의 ready)
+ *   · 문구는 locales/*.json 이고, 없는 이름은 서버가 준 코드를 그대로 보여준다
+ *
+ * ★ 등록 id 는 **참여자 id 와 같아야** 대조가 된다. 프로필이 바뀌면 참여자 id 도
+ *   바뀌므로(oneway 는 speaker/listener, twoway_voice 는 a/b), 지금 고른 설정으로
+ *   서버가 만들 세션의 참여자를 그대로 보여주고 그 중에서 고르게 한다.
+ */
+
+// 참여자를 물어보는 짧은 세션의 대기 한도. 프로토콜과 무관한 화면 사정이다.
+const PARTICIPANT_PROBE_MS = 5000;
+
+const spk = {
+  clips: [],          // 아직 올리지 않은 녹음/파일 {id, label, filename, blob, url}
+  seq: 0,
+  recorder: null,
+  recording: false,
+  participants: [],   // 지금 설정으로 열릴 세션의 참여자. 서버가 준 그대로다
+  profile: '',        // 그 참여자를 만든 프로필. 서버가 확정한 이름이다
+  probeKey: null,     // 어떤 설정으로 물어본 결과인지
+  probing: false,
+  choice: null,       // 등록 대상 참여자 id
+  name: '',           // 표시 이름 (비우면 서버가 id 를 쓴다)
+  policy: null,       // 관리 영역에서 고른 정책 — 누르기 전에는 적용되지 않는다
+  list: null,         // GET /v1/speakers 응답
+};
+
+function speakerConfig() {
+  return (state.config && state.config.speaker_id) || null;
+}
+
+function speakerMessage(node, text, kind) {
+  if (!node) return;
+  node.textContent = text;
+  node.className = kind ? `status ${kind}` : 'status';
+}
+
+/** 거부 사유. 코드는 서버가 정하고 문구는 카탈로그에서 온다 — 없으면 코드를 그대로. */
+function skippedText(reason, detail) {
+  const text = nameOf(`skipped.${reason}`, reason);
+  const similarity = detail ? detail.speaker_similarity : undefined;
+  if (similarity === undefined || similarity === null) return text;
+  return `${text} (${t('speakers.similarity', { value: similarity })})`;
+}
+
+/* ---- 상태 ---------------------------------------------------------------- */
+
+function renderSpeakers() {
+  const info = speakerConfig();
+  const panel = $('#speakers');
+  const toggle = $('#speakers-toggle');
+  if (!panel || !toggle) return;
+
+  // 서버가 화자 식별을 내보내지 않으면 이 화면은 존재하지 않는다.
+  if (!info) {
+    panel.hidden = true;
+    toggle.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  toggle.hidden = false;
+
+  renderSpeakerState();
+  renderPolicyField();
+  renderSpeakerForm();
+  renderSpeakerList();
+  renderClips();
+  enrollButton();
+  if (!panel.classList.contains('collapsed')) openSpeakers();
+}
+
+function renderSpeakerState() {
+  const info = speakerConfig();
+  if (!info) return;
+  // 목록을 받아 뒀으면 그쪽이 더 최신이다 (등록·삭제 직후).
+  const live = spk.list;
+  const count = live ? live.count : info.enrolled;
+  const auto = live ? live.auto_enroll : info.auto_enroll;
+  const policy = live ? live.policy : info.policy;
+
+  $('#speaker-state').textContent = t('speakers.state', {
+    count,
+    auto: t(auto ? 'speakers.auto_enroll.on' : 'speakers.auto_enroll.off'),
+    policy: nameOf(`policy.${policy}`, policy),
+  });
+
+  const error = (live ? live.error : info.store_error) || '';
+  const box = $('#speaker-store-error');
+  box.textContent = error ? t('speakers.store_error', { message: error }) : '';
+  box.hidden = !error;
+}
+
+/* ---- 참여자 -------------------------------------------------------------- */
+
+/** 참여자 구성을 정하는 값들. 하나라도 바뀌면 id·언어가 달라진다. */
+function participantKey() {
+  return [
+    state.form.profile || '',
+    state.form.mode || '',
+    state.form.source_lang || '',
+    state.form.target_lang || '',
+  ].join('|');
+}
+
+/**
+ * 참여자 id 를 서버에 물어본다.
+ *
+ * 프로필별 참여자 목록을 클라이언트에 두지 않기 위해서다 — 세션을 만드는 쪽이 곧
+ * 정답이므로 스트림을 열어 ready 만 받고 바로 닫는다. 오디오는 한 프레임도 보내지
+ * 않으므로 엔진도 마이크도 건드리지 않는다.
+ */
+function probeParticipants() {
+  const cfg = state.config;
+  if (!cfg || !cfg.stream || !cfg.stream.path || typeof WebSocket === 'undefined') {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    let ws = null;
+    let timer = null;
+    try {
+      ws = new WebSocket(streamUrl(cfg.stream.path));
+    } catch (_) {
+      resolve(null);
+      return;
+    }
+    const finish = (value) => {
+      clearTimeout(timer);
+      try { ws.close(); } catch (_) { /* 이미 닫힘 */ }
+      resolve(value);                     // 두 번째부터는 무시된다
+    };
+    timer = setTimeout(() => finish(null), PARTICIPANT_PROBE_MS);
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify(hfConfigMessage(Number(cfg.audio.stt_sample_rate))));
+    });
+    ws.addEventListener('message', (event) => {
+      if (typeof event.data !== 'string') return;
+      let msg = null;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+      if (msg.type === 'ready') finish(msg);
+      else if (msg.type === 'error') finish(null);
+    });
+    ws.addEventListener('close', () => finish(null));
+    ws.addEventListener('error', () => finish(null));
+  });
+}
+
+/** ready 이벤트에서 참여자를 받아 둔다. 핸즈프리가 열릴 때도 같은 것이 온다. */
+function adoptParticipants(ready) {
+  spk.participants = ready.participants || [];
+  spk.profile = ready.profile || '';   // 서버가 실제로 고른 프로필. 화면의 이름도 이것을 따른다
+  spk.probeKey = participantKey();
+  renderSpeakerForm();
+  renderSpeakerList();               // "참여자에 없음" 표시가 달라진다
+}
+
+async function refreshParticipants() {
+  const key = participantKey();
+  if (spk.probing || spk.probeKey === key) return;
+  spk.probing = true;
+  spk.probeKey = key;
+  let ready = null;
+  try {
+    ready = await probeParticipants();
+  } finally {
+    spk.probing = false;
+  }
+  if (spk.probeKey !== key) return;   // 그 사이 설정이 또 바뀌었다
+  if (ready) {
+    adoptParticipants(ready);
+    return;
+  }
+  spk.probeKey = null;                // 다음에 다시 물어본다
+  spk.participants = [];
+  spk.profile = '';
+  renderSpeakerForm();
+  renderSpeakerList();
+}
+
+/** 프로필·언어가 바뀌면 참여자도 바뀐다. 열려 있을 때만 다시 물어본다. */
+function speakerSettingsChanged() {
+  const panel = $('#speakers');
+  if (!panel || panel.hidden) return;
+  if (panel.classList.contains('collapsed')) {
+    spk.probeKey = null;              // 다음에 열 때 다시 물어본다
+    return;
+  }
+  refreshParticipants();
+}
+
+/* ---- 등록 폼 -------------------------------------------------------------- */
+
+/** 말할 수 있는 참여자만. 듣기만 하는 자리에 목소리를 등록할 이유가 없다. */
+function speakerCandidates() {
+  return spk.participants.filter((p) => p.input);
+}
+
+function renderSpeakerForm() {
+  const box = $('#speaker-form');
+  const line = $('#speaker-participants');
+  if (!box || !line || !state.config) return;
+  box.replaceChildren();
+
+  const candidates = speakerCandidates();
+  // 참여자를 준 것이 서버이므로 프로필 이름도 서버가 확정한 것을 쓴다. 그래야
+  // "이 프로필의 참여자"라는 두 값이 어긋나지 않는다.
+  const profileId = (candidates.length && spk.profile) || state.form.profile || '';
+  const profile = (state.config.profiles || []).find((p) => p.id === profileId);
+  const profileLabel = (profile && profile.label) || profileId;
+
+  if (candidates.length) {
+    // 등록 id 와 참여자 id 가 같은 것이라는 사실을 여기서 드러낸다.
+    line.textContent = t('speakers.participants', {
+      profile: profileLabel,
+      ids: candidates.map((p) => t('speakers.participant', { id: p.id, lang: p.lang })).join(', '),
+    });
+    if (!candidates.some((p) => p.id === spk.choice)) spk.choice = candidates[0].id;
+    addSelect(box, {
+      name: 'speaker_id',
+      transient: true,                // 번역 요청에 실리는 값이 아니다
+      label: t('speakers.field.speaker'),
+      hint: t('speakers.field.speaker.hint'),
+      options: candidates.map((p) => ({
+        value: p.id,
+        label: t('speakers.participant', { id: p.id, lang: p.lang }),
+      })),
+      value: spk.choice,
+      onChange: (value) => { spk.choice = value; },
+    });
+  } else {
+    // 서버에 물어보지 못했다. 목록을 지어내지 않고 id 를 직접 받는다.
+    line.textContent = t('speakers.participants.unknown', { profile: profileLabel });
+    addText(box, {
+      name: 'speaker_id',
+      label: t('speakers.field.id'),
+      hint: t('speakers.field.id.hint'),
+      value: spk.choice || '',
+      onChange: (value) => { spk.choice = value.trim(); },
+    });
+  }
+
+  addText(box, {
+    name: 'name',
+    label: t('speakers.field.name'),
+    hint: t('speakers.field.name.hint'),
+    value: spk.name,
+    placeholder: spk.choice || '',
+    onChange: (value) => { spk.name = value; },
+  });
+}
+
+/* ---- 클립 ---------------------------------------------------------------- */
+
+function addClip(blob, spec) {
+  spk.seq += 1;
+  const n = spk.seq;
+  const ext = (spec && spec.ext) || 'bin';
+  spk.clips.push({
+    id: n,
+    label: (spec && spec.label) || t('speakers.clip.recorded', { n }),
+    filename: (spec && spec.filename) || `enroll-${n}.${ext}`,
+    blob,
+    url: URL.createObjectURL(blob),
+  });
+  renderClips();
+}
+
+function removeClip(id) {
+  const keep = [];
+  for (const clip of spk.clips) {
+    if (clip.id === id) URL.revokeObjectURL(clip.url);
+    else keep.push(clip);
+  }
+  spk.clips = keep;
+  renderClips();
+}
+
+function clearClips() {
+  for (const clip of spk.clips) URL.revokeObjectURL(clip.url);
+  spk.clips = [];
+  renderClips();
+}
+
+function renderClips() {
+  const list = $('#enroll-clips');
+  if (!list) return;
+  list.replaceChildren();
+
+  for (const clip of spk.clips) {
+    const node = $('#clip-template').content.cloneNode(true);
+    node.querySelector('.clip-name').textContent = t('speakers.clip', {
+      name: clip.label,
+      kb: Math.max(1, Math.round(clip.blob.size / 1024)),
+    });
+    node.querySelector('.player').src = clip.url;
+    const remove = node.querySelector('.clip-remove');
+    remove.textContent = t('speakers.clip.remove');
+    remove.addEventListener('click', () => removeClip(clip.id));
+    list.appendChild(node);
+  }
+
+  $('#enroll-clips-title').textContent =
+    spk.clips.length ? t('speakers.clips', { count: spk.clips.length }) : '';
+  $('#enroll-submit').disabled = !spk.clips.length;
+  $('#enroll-clear').disabled = !spk.clips.length;
+}
+
+function enrollButton() {
+  const button = $('#enroll-record');
+  if (!button) return;
+  button.textContent = t(spk.recording ? 'speakers.recording' : 'speakers.record');
+  button.classList.toggle('is-recording', spk.recording);
+  button.disabled = !recorderSupported();
+}
+
+/** 다른 곳이 마이크를 쓰고 있으면 놓지 않는다. */
+function releaseMicIfIdle() {
+  if (state.recording || spk.recording || hf.running) return;
+  releaseMic();
+}
+
+async function toggleEnrollRecording() {
+  const message = $('#enroll-message');
+  if (spk.recording) {
+    spk.recording = false;
+    try { spk.recorder.stop(); } catch (_) { /* 이미 멈춘 경우 */ }
+    enrollButton();
+    speakerMessage(message, '');
+    return;
+  }
+  try {
+    const stream = await micStream();
+    const chunks = [];
+    const recorder = new MediaRecorder(stream);
+    recorder.addEventListener('dataavailable', (e) => { if (e.data.size) chunks.push(e.data); });
+    recorder.addEventListener('stop', () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType });
+      if (blob.size) addClip(blob, { ext: extensionOf(recorder.mimeType) });
+      releaseMicIfIdle();
+    });
+    recorder.start();
+    spk.recorder = recorder;
+    spk.recording = true;
+    enrollButton();
+    speakerMessage(message, t('speakers.recording.hint'), 'busy');
+  } catch (err) {
+    speakerMessage(message, t('error.mic', { message: err.message }), 'error');
+  }
+}
+
+/* ---- 등록 ---------------------------------------------------------------- */
+
+async function enrollVoice() {
+  const message = $('#enroll-message');
+  const id = (spk.choice || '').trim();
+  if (!id) { speakerMessage(message, t('speakers.need_speaker'), 'error'); return; }
+  if (!spk.clips.length) { speakerMessage(message, t('speakers.need_clips'), 'error'); return; }
+
+  const form = new FormData();
+  form.append('speaker_id', id);
+  if (spk.name.trim()) form.append('name', spk.name.trim());
+  // 화자 임베딩 엔진을 고르는 데 쓰인다. 설정에서 고른 모드를 그대로 따른다.
+  if (state.form.mode) form.append('mode', state.form.mode);
+  for (const clip of spk.clips) form.append('files', clip.blob, clip.filename);
+
+  const button = $('#enroll-submit');
+  button.disabled = true;
+  speakerMessage(message, t('speakers.enrolling', { count: spk.clips.length }), 'busy');
+
+  try {
+    const result = await getJSON('/v1/speakers/enroll', { method: 'POST', body: form });
+    const person = result.speaker || {};
+    const lines = [t('speakers.enrolled', {
+      name: person.name || id,
+      id: person.id || id,
+      count: person.utterances || spk.clips.length,
+    })];
+
+    // 올린 클립들이 서로 얼마나 닮았는지. 임계값보다 낮으면 다른 사람의 목소리가
+    // 섞였다는 뜻이라 그대로 등록해두면 대조가 어긋난다.
+    const spread = result.min_pairwise_similarity;
+    const threshold = result.threshold;
+    let kind = '';
+    if (spread !== null && spread !== undefined) {
+      if (threshold !== null && threshold !== undefined && Number(spread) < Number(threshold)) {
+        lines.push(t('speakers.quality.low', { similarity: spread, threshold }));
+        kind = 'warn';
+      } else {
+        lines.push(t('speakers.quality.ok', { similarity: spread }));
+      }
+    }
+    speakerMessage(message, lines.join(' '), kind);
+
+    clearClips();
+    spk.name = '';
+    await refreshSpeakerList();
+    renderSpeakerForm();
+  } catch (err) {
+    speakerMessage(message, t('speakers.error', { message: err.message }), 'error');
+  } finally {
+    button.disabled = !spk.clips.length;
+  }
+}
+
+/* ---- 등록 목록 ------------------------------------------------------------ */
+
+async function refreshSpeakerList() {
+  try {
+    spk.list = await getJSON('/v1/speakers');
+  } catch (err) {
+    spk.list = null;
+    speakerMessage($('#enroll-message'), t('speakers.error', { message: err.message }), 'error');
+  }
+  renderSpeakerState();
+  renderSpeakerList();
+}
+
+function renderSpeakerList() {
+  const list = $('#speaker-list');
+  if (!list) return;
+  const people = (spk.list && spk.list.speakers) || [];
+  const known = new Set(spk.participants.map((p) => p.id));
+  list.replaceChildren();
+
+  for (const person of people) {
+    const node = $('#speaker-template').content.cloneNode(true);
+    node.querySelector('.speaker-name').textContent = person.name || person.id;
+    node.querySelector('.speaker-id').textContent = person.id;
+
+    const meta = [t('speakers.meta', {
+      count: person.utterances,
+      engine: [person.engine, person.model].filter(Boolean).join(' ') || '—',
+      updated: person.updated_at
+        ? new Date(person.updated_at).toLocaleString(state.locale)
+        : '—',
+    })];
+    // 등록 id 가 지금 세션의 참여자 중에 없으면 이 목소리는 대조에 쓰이지 않는다.
+    // 두 id 가 같은 것이라는 사실이 가장 잘 드러나는 자리다.
+    const stray = known.size > 0 && !known.has(person.id);
+    if (stray) meta.push(t('speakers.unused'));
+    node.querySelector('.speaker-meta').textContent = meta.join(' · ');
+    if (stray) node.querySelector('.speaker').classList.add('unused');
+
+    const remove = node.querySelector('.speaker-delete');
+    remove.textContent = t('speakers.delete');
+    remove.addEventListener('click', () => deleteSpeaker(person.id));
+    list.appendChild(node);
+  }
+
+  $('#speaker-empty').hidden = people.length > 0;
+}
+
+async function deleteSpeaker(id) {
+  const message = $('#enroll-message');
+  try {
+    await getJSON(`/v1/speakers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    speakerMessage(message, t('speakers.deleted', { id }));
+  } catch (err) {
+    speakerMessage(message, t('speakers.error', { message: err.message }), 'error');
+  }
+  await refreshSpeakerList();
+}
+
+/* ---- 정책 (서버 전역) ------------------------------------------------------ */
+
+/*
+ * 이 브라우저의 설정이 아니라 **서버의 설정**이다. /v1/admin/config 는 즉시
+ * 전역에 적용되므로, 고르는 것만으로는 아무 일도 일어나지 않게 두고 따로 누르게 한다.
+ */
+
+function renderPolicyField() {
+  const info = speakerConfig();
+  const box = $('#policy-field');
+  if (!info || !box) return;
+  box.replaceChildren();
+
+  const policies = info.policies || [];
+  const server = (spk.list && spk.list.policy) || info.policy;
+  if (!policies.length) {
+    $('#policy-desc').textContent = '';
+    return;
+  }
+  if (!policies.includes(spk.policy)) {
+    spk.policy = policies.includes(server) ? server : policies[0];
+  }
+
+  addSelect(box, {
+    name: 'speaker_policy',
+    transient: true,             // 번역 요청에 실리지 않는다 — 서버 전역 설정이다
+    label: t('speakers.policy.field'),
+    options: policies.map((p) => ({ value: p, label: nameOf(`policy.${p}`, p) })),
+    value: spk.policy,
+    onChange: (value) => { spk.policy = value; describePolicy(); },
+  });
+  describePolicy();
+}
+
+function describePolicy() {
+  $('#policy-desc').textContent = nameOf(`policy.${spk.policy}.desc`, '');
+}
+
+async function applyPolicy() {
+  const message = $('#policy-message');
+  const info = speakerConfig();
+  if (!info || !spk.policy) return;
+
+  const server = (spk.list && spk.list.policy) || info.policy;
+  if (spk.policy === server) {
+    speakerMessage(message, t('speakers.policy.unchanged'));
+    return;
+  }
+
+  const button = $('#policy-apply');
+  button.disabled = true;
+  try {
+    await getJSON('/v1/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speaker_id: { policy: spk.policy } }),
+    });
+    // 전역이라는 사실을 결과 문구에서 한 번 더 말한다.
+    speakerMessage(message, t('speakers.policy.applied', {
+      policy: nameOf(`policy.${spk.policy}`, spk.policy),
+    }), 'warn');
+    await loadConfig();
+    await refreshSpeakerList();
+  } catch (err) {
+    speakerMessage(message, t('speakers.error', { message: err.message }), 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+/* ---- 패널 ---------------------------------------------------------------- */
+
+function openSpeakers() {
+  refreshSpeakerList();
+  refreshParticipants();
+}
+
+function wireSpeakers() {
+  $('#speakers-toggle').addEventListener('click', () => {
+    const panel = $('#speakers');
+    const collapsed = panel.classList.toggle('collapsed');
+    if (!collapsed) openSpeakers();
+  });
+
+  $('#enroll-record').addEventListener('click', toggleEnrollRecording);
+
+  $('#enroll-file').addEventListener('change', (e) => {
+    for (const file of e.target.files || []) {
+      addClip(file, { label: file.name, filename: file.name });
+    }
+    e.target.value = '';
+  });
+
+  $('#enroll-clear').addEventListener('click', clearClips);
+  $('#enroll-submit').addEventListener('click', enrollVoice);
+  $('#policy-apply').addEventListener('click', applyPolicy);
+}
+
 /* ------------------------------------------------------------------ 입력 */
 
 function wireControls() {
@@ -1167,8 +1782,11 @@ function wireControls() {
   }
   ptt.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // 스페이스바 홀드. 입력 요소에 포커스가 있을 때는 방해하지 않는다.
-  const typing = (target) => /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName);
+  // 스페이스바 홀드. 입력 요소에 포커스가 있거나 data-no-ptt 영역 안이면 방해하지 않는다
+  // (화자 등록 패널이 그 표시를 달고 있다 — 거기서 스페이스는 그 화면의 버튼용이다).
+  const typing = (target) => !target
+    || /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)
+    || Boolean(target.closest && target.closest('[data-no-ptt]'));
   document.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || e.repeat || typing(e.target)) return;
     e.preventDefault();
@@ -1203,6 +1821,8 @@ function wireControls() {
   $('#settings-toggle').addEventListener('click', () => {
     $('#settings').classList.toggle('collapsed');
   });
+
+  wireSpeakers();
 
   // 페이지를 떠날 때 소켓과 마이크를 확실히 놓는다. bfcache 로 돌아오면 다시 켜면 된다.
   window.addEventListener('pagehide', () => {

@@ -3,8 +3,10 @@
 
   "locale.label": "Display language",
   "settings.toggle": "Settings",
+  "speakers.toggle": "Voices",
 
   "section.settings": "Settings",
+  "section.speakers": "Voice enrollment",
   "section.input": "Input",
 
   "field.input_mode": "Input method",
@@ -62,6 +64,70 @@
 
   "upload.label": "Or upload an audio file",
 
+  "speakers.state": "{count} voice(s) enrolled · automatic learning {auto} · policy: {policy}",
+  "speakers.auto_enroll.on": "on",
+  "speakers.auto_enroll.off": "off",
+  "speakers.store_error": "The voice store cannot be used: {message}",
+
+  "speakers.participants": "“{profile}” gives the speakers these ids: {ids}. Enroll a voice under the id of the person it belongs to — the id you enroll is the id the server matches against.",
+  "speakers.participants.unknown": "Could not ask the server which participant ids “{profile}” uses. Type the id yourself — it has to be exactly the participant id, or the voice will never be matched.",
+  "speakers.participant": "{id} · speaks {lang}",
+
+  "speakers.field.speaker": "Whose voice is this",
+  "speakers.field.speaker.hint": "The participant this voice will be matched to",
+  "speakers.field.id": "Participant id",
+  "speakers.field.id.hint": "Exactly as the session names it, e.g. the id shown when a session opens",
+  "speakers.field.name": "Display name",
+  "speakers.field.name.hint": "Optional. The participant id is used if you leave this empty",
+
+  "speakers.record": "Record a clip",
+  "speakers.recording": "Recording — click to stop",
+  "speakers.recording.hint": "Recording. Click the button again when you are done.",
+  "speakers.record.hint": "A few seconds of ordinary speech. Several clips give a steadier voice print.",
+  "speakers.upload": "Or add audio files",
+  "speakers.clips": "{count} clip(s) ready to upload",
+  "speakers.clip": "{name} · {kb} KB",
+  "speakers.clip.recorded": "Recording {n}",
+  "speakers.clip.remove": "Remove",
+  "speakers.clear_clips": "Remove all clips",
+  "speakers.submit": "Enroll this voice",
+
+  "speakers.need_speaker": "Choose whose voice this is first.",
+  "speakers.need_clips": "Add at least one clip first.",
+  "speakers.enrolling": "Uploading {count} clip(s)…",
+  "speakers.enrolled": "Enrolled “{name}” as {id} from {count} utterance(s).",
+  "speakers.quality.ok": "The clips are {similarity} alike, so they sound like one person.",
+  "speakers.quality.low": "Careful: the clips are only {similarity} alike, below the match threshold of {threshold}. One of them is probably somebody else — remove it and enroll again.",
+  "speakers.similarity": "similarity {value}",
+
+  "speakers.list": "Enrolled voices",
+  "speakers.none": "No voice is enrolled yet.",
+  "speakers.meta": "{count} utterance(s) · {engine} · updated {updated}",
+  "speakers.unused": "no participant with this id in the session above, so it is never matched",
+  "speakers.delete": "Delete",
+  "speakers.deleted": "Deleted the voice enrolled for {id}.",
+  "speakers.error": "The voice store refused that: {message}",
+
+  "speakers.admin": "Server-wide settings (administrator)",
+  "speakers.admin.warning": "These belong to the server, not to this browser. Changing them takes effect immediately for everyone using this server, including sessions already running.",
+  "speakers.policy.field": "Identification policy",
+  "speakers.policy.apply": "Apply to the server",
+  "speakers.policy.applied": "The server now uses “{policy}”. Everyone using this server is affected.",
+  "speakers.policy.unchanged": "The server already uses that policy.",
+
+  "policy.enrolled_first": "Enrolled first",
+  "policy.enrolled_first.desc": "Enrolled voices are identified; an unknown voice is given a free participant seat and still translated. Best for talking to someone you just met.",
+  "policy.strict": "Enrolled only",
+  "policy.strict.desc": "Only enrolled voices are translated; anything else is dropped. Keeps a television or a passer-by out. If nobody is enrolled, nothing is translated at all.",
+  "policy.off": "Off",
+  "policy.off.desc": "No voice matching at all — exactly as it was before enrollment existed. The voice engine is never called.",
+
+  "skipped.speaker.unenrolled": "Skipped: this voice is not one of the enrolled ones.",
+  "skipped.speaker.none_enrolled": "Skipped: no voice is enrolled, and the policy only accepts enrolled voices.",
+  "skipped.speaker.no_unenrolled_participant": "Skipped: every participant already has a voice, and this was none of them.",
+  "skipped.speaker.no_audio": "Skipped: there was no audio to compare.",
+  "skipped.speaker.engine_failed": "Skipped: the voice engine could not be reached.",
+
   "status.ready": "Ready.",
   "status.loading": "Loading settings…",
   "status.recording": "Recording…",
@@ -88,6 +154,15 @@
   "metric.vad_speech_ms": "Speech",
   "metric.segment_reason": "Cut by",
   "metric.pipeline_ms": "Pipeline",
+  "metric.speaker_policy": "Speaker policy",
+  "metric.speaker_threshold": "Match threshold",
+  "metric.speaker_enrolled": "Voices known",
+  "metric.speaker_auto_enroll": "Automatic learning",
+  "metric.speaker_engine": "Voice engine",
+  "metric.speaker_engine_error": "Voice engine error",
+  "metric.speaker_similarity": "Voice similarity",
+  "metric.speaker_closest": "Closest voice",
+  "metric.speaker_source": "Identified from",
 
   "server.info": "Server: {id} · orchestrator locale: {locale}",
 

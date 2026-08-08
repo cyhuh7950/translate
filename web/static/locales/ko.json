@@ -3,8 +3,10 @@
 
   "locale.label": "표시 언어",
   "settings.toggle": "설정",
+  "speakers.toggle": "목소리",
 
   "section.settings": "설정",
+  "section.speakers": "목소리 등록",
   "section.input": "입력",
 
   "field.input_mode": "입력 방식",
@@ -62,6 +64,70 @@
 
   "upload.label": "또는 오디오 파일 올리기",
 
+  "speakers.state": "등록된 목소리 {count}개 · 자동 학습 {auto} · 정책: {policy}",
+  "speakers.auto_enroll.on": "켜짐",
+  "speakers.auto_enroll.off": "꺼짐",
+  "speakers.store_error": "목소리 저장소를 쓸 수 없습니다: {message}",
+
+  "speakers.participants": "“{profile}” 에서 말하는 자리는 {ids} 입니다. 목소리는 그 사람의 자리 id 로 등록하세요 — 등록한 id 와 참여자 id 가 같아야 서버가 대조합니다.",
+  "speakers.participants.unknown": "“{profile}” 의 참여자 id 를 서버에 물어보지 못했습니다. 직접 입력하세요 — 참여자 id 와 정확히 같아야 대조됩니다.",
+  "speakers.participant": "{id} · {lang} 로 말함",
+
+  "speakers.field.speaker": "누구의 목소리인가",
+  "speakers.field.speaker.hint": "이 목소리를 대조할 참여자 자리",
+  "speakers.field.id": "참여자 id",
+  "speakers.field.id.hint": "세션이 쓰는 이름 그대로. 세션이 열릴 때 표시되는 id 입니다",
+  "speakers.field.name": "표시 이름",
+  "speakers.field.name.hint": "선택 사항. 비우면 참여자 id 를 그대로 씁니다",
+
+  "speakers.record": "녹음하기",
+  "speakers.recording": "녹음 중 — 다시 누르면 멈춤",
+  "speakers.recording.hint": "녹음 중입니다. 다 말했으면 버튼을 다시 누르세요.",
+  "speakers.record.hint": "평소 말투로 몇 초면 됩니다. 여러 개를 모을수록 목소리가 안정적으로 잡힙니다.",
+  "speakers.upload": "또는 오디오 파일 추가",
+  "speakers.clips": "올릴 클립 {count}개",
+  "speakers.clip": "{name} · {kb} KB",
+  "speakers.clip.recorded": "녹음 {n}",
+  "speakers.clip.remove": "빼기",
+  "speakers.clear_clips": "전부 빼기",
+  "speakers.submit": "이 목소리 등록",
+
+  "speakers.need_speaker": "누구의 목소리인지 먼저 고르세요.",
+  "speakers.need_clips": "클립을 하나 이상 모으세요.",
+  "speakers.enrolling": "클립 {count}개를 올리는 중…",
+  "speakers.enrolled": "“{name}” 을(를) {id} 로 등록했습니다 (발화 {count}개).",
+  "speakers.quality.ok": "클립들이 {similarity} 만큼 닮았습니다. 한 사람의 목소리로 보입니다.",
+  "speakers.quality.low": "주의: 클립들이 {similarity} 만큼밖에 닮지 않았습니다. 대조 임계값 {threshold} 보다 낮습니다 — 다른 사람의 목소리가 섞였을 수 있으니 그 클립을 빼고 다시 등록하세요.",
+  "speakers.similarity": "유사도 {value}",
+
+  "speakers.list": "등록된 목소리",
+  "speakers.none": "아직 등록된 목소리가 없습니다.",
+  "speakers.meta": "발화 {count}개 · {engine} · {updated} 갱신",
+  "speakers.unused": "위 세션에 이 id 의 참여자가 없어 대조에 쓰이지 않습니다",
+  "speakers.delete": "삭제",
+  "speakers.deleted": "{id} 의 등록된 목소리를 지웠습니다.",
+  "speakers.error": "목소리 저장소가 거절했습니다: {message}",
+
+  "speakers.admin": "서버 전역 설정 (관리자)",
+  "speakers.admin.warning": "이 브라우저가 아니라 서버의 설정입니다. 바꾸면 이 서버를 쓰는 모든 사람에게, 이미 열려 있는 세션까지 즉시 적용됩니다.",
+  "speakers.policy.field": "화자 식별 정책",
+  "speakers.policy.apply": "서버에 적용",
+  "speakers.policy.applied": "서버가 이제 “{policy}” 를 씁니다. 이 서버를 쓰는 모든 사람에게 적용됩니다.",
+  "speakers.policy.unchanged": "서버가 이미 그 정책을 쓰고 있습니다.",
+
+  "policy.enrolled_first": "등록 우선",
+  "policy.enrolled_first.desc": "등록된 목소리는 누구인지 가려내고, 등록 안 된 목소리는 남은 참여자 자리로 넣어 그대로 통역합니다. 처음 만난 사람과 대화할 때 적합합니다.",
+  "policy.strict": "등록된 목소리만",
+  "policy.strict.desc": "등록된 목소리만 통역하고 나머지는 버립니다. TV 나 지나가는 사람의 말을 막습니다. 등록된 목소리가 하나도 없으면 아무것도 통역되지 않습니다.",
+  "policy.off": "사용 안 함",
+  "policy.off.desc": "목소리 대조를 하지 않습니다 — 등록 기능이 없던 때와 완전히 같습니다. 목소리 엔진을 아예 부르지 않습니다.",
+
+  "skipped.speaker.unenrolled": "건너뜀: 등록된 목소리 중에 없습니다.",
+  "skipped.speaker.none_enrolled": "건너뜀: 등록된 목소리가 하나도 없는데 정책이 등록된 것만 받습니다.",
+  "skipped.speaker.no_unenrolled_participant": "건너뜀: 참여자 자리가 모두 찼는데 그 중 누구와도 맞지 않습니다.",
+  "skipped.speaker.no_audio": "건너뜀: 대조할 오디오가 없었습니다.",
+  "skipped.speaker.engine_failed": "건너뜀: 목소리 엔진에 닿지 못했습니다.",
+
   "status.ready": "준비됨.",
   "status.loading": "설정을 불러오는 중…",
   "status.recording": "녹음 중…",
@@ -88,6 +154,15 @@
   "metric.vad_speech_ms": "발화",
   "metric.segment_reason": "확정 이유",
   "metric.pipeline_ms": "파이프라인",
+  "metric.speaker_policy": "화자 정책",
+  "metric.speaker_threshold": "대조 임계값",
+  "metric.speaker_enrolled": "아는 목소리",
+  "metric.speaker_auto_enroll": "자동 학습",
+  "metric.speaker_engine": "목소리 엔진",
+  "metric.speaker_engine_error": "목소리 엔진 오류",
+  "metric.speaker_similarity": "목소리 유사도",
+  "metric.speaker_closest": "가장 가까운 목소리",
+  "metric.speaker_source": "판정 근거",
 
   "server.info": "서버: {id} · 오케스트레이터 로케일: {locale}",
 

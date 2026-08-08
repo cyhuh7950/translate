@@ -100,6 +100,9 @@ main {
 #settings.collapsed .fields,
 #settings.collapsed .meta { display: none; }
 
+/* 접혀 있어도 등록 수·정책은 보인다. 접히는 것은 본문뿐이다. */
+#speakers.collapsed .speakers-body { display: none; }
+
 /* ---------------------------------------------------------------- 폼 */
 
 .fields {
@@ -119,7 +122,7 @@ main {
 .field-check { flex-direction: row; align-items: center; gap: 8px; }
 .field-check .field-label { font-size: 14px; color: var(--text); }
 
-select, input[type="file"] {
+select, input[type="text"], input[type="file"] {
   font: inherit;
   color: var(--text);
   background: var(--surface-2);
@@ -246,6 +249,63 @@ button { font: inherit; cursor: pointer; }
 .status.error { color: var(--danger); }
 .status.busy { color: var(--busy); }
 
+/* ---------------------------------------------------------------- 화자 등록 */
+
+.speakers-body { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+
+.speaker-state { margin: 0; font-size: 13px; color: var(--muted); }
+.participants { margin: 0; font-size: 13px; }
+
+.enroll-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.enroll-row .file-label { flex: 1 1 200px; min-width: 0; }
+
+.hint.left { text-align: left; }
+.subhead { margin: 6px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+
+/* 녹음 중인 것을 PTT 버튼과 같은 색으로 알린다. */
+.ghost.is-recording { border-color: var(--danger); color: var(--danger); }
+
+.clips, .speaker-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+.clip, .speaker {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 8px 10px;
+}
+
+.clip-name { font-size: 13px; overflow-wrap: anywhere; }
+.clip .player { grid-column: 1 / -1; margin-top: 6px; }
+
+.speaker-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.speaker-name { font-weight: 600; overflow-wrap: anywhere; }
+.speaker-id {
+  font-size: 11px; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.speaker-meta { grid-column: 1; margin: 0; font-size: 11px; color: var(--muted); }
+.speaker-delete { grid-row: 1 / span 2; }
+
+/* 지금 세션의 참여자 id 와 맞지 않는 등록. 대조에 쓰이지 않는다. */
+.speaker.unused { border-style: dashed; }
+.speaker.unused .speaker-id { color: var(--busy); }
+
+/* 서버 전역 설정. 무심코 열리지 않게 접어 둔다. */
+.admin { border-top: 1px solid var(--border); padding-top: 10px; }
+.admin > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.admin .warn { margin: 8px 0; font-size: 12px; color: var(--busy); }
+.admin #policy-desc { margin: 6px 0 10px; }
+
+.status.warn { color: var(--busy); }
+#speaker-store-error, #enroll-message, #policy-message { text-align: left; }
+
 /* ---------------------------------------------------------------- 이력 */
 
 .history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
@@ -257,6 +317,11 @@ button { font: inherit; cursor: pointer; }
   background: var(--surface-2);
   padding: 12px;
 }
+
+/* 화자 식별이 처리하지 않기로 한 발화. 오류가 아니라 "건너뜀"으로 보이게 한다. */
+.turn.is-skipped { border-style: dashed; }
+.turn.is-skipped .source .text { color: var(--muted); }
+.skipped { margin: 0 0 8px; font-size: 12px; color: var(--busy); }
 
 .turn-head {
   display: flex; justify-content: space-between; gap: 8px;
