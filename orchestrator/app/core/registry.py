@@ -29,6 +29,8 @@ import logging
 import pkgutil
 from typing import Any, Callable, Iterable, TypeVar
 
+from .errors import AppError, listing
+
 log = logging.getLogger("registry")
 
 T = TypeVar("T")
@@ -38,8 +40,11 @@ _REGISTRY: dict[tuple[str, str], Any] = {}
 _DISCOVERED: set[str] = set()
 
 
-class RegistryError(Exception):
-    pass
+class RegistryError(AppError):
+    """구현체를 찾지 못했거나 등록이 어긋났다. 배치·설정의 문제다."""
+
+    default_code = "registry.failed"
+    default_status = 500
 
 
 def register(kind: str, name: str) -> Callable[[T], T]:
@@ -49,8 +54,11 @@ def register(kind: str, name: str) -> Callable[[T], T]:
     def decorator(obj: T) -> T:
         if key in _REGISTRY and _REGISTRY[key] is not obj:
             raise RegistryError(
-                f"Implementation already registered: {kind}/{name} "
-                f"({_REGISTRY[key]!r} vs {obj!r}). Use a different name"
+                "registry.duplicate",
+                kind=kind,
+                name=name,
+                existing=repr(_REGISTRY[key]),
+                incoming=repr(obj),
             )
         _REGISTRY[key] = obj
         log.debug("Registered: %s/%s → %s", kind, name, getattr(obj, "__name__", obj))
@@ -62,13 +70,12 @@ def register(kind: str, name: str) -> Callable[[T], T]:
 def resolve(kind: str, name: str) -> Any:
     """이름으로 구현체를 찾는다. 없으면 무엇이 있는지 알려주며 죽는다."""
     if not name:
-        raise RegistryError(f"{kind} implementation name is empty. Check your config")
+        raise RegistryError("registry.name_empty", kind=kind)
     try:
         return _REGISTRY[(kind, name)]
     except KeyError:
         raise RegistryError(
-            f"Unregistered {kind} implementation: '{name}'. "
-            f"Available: {', '.join(available(kind)) or '(none)'}"
+            "registry.unknown", kind=kind, name=name, available=listing(available(kind))
         ) from None
 
 
@@ -102,7 +109,7 @@ def discover(package: str) -> int:
     try:
         pkg = importlib.import_module(package)
     except ModuleNotFoundError as exc:
-        raise RegistryError(f"Package to discover not found: {package} ({exc})") from exc
+        raise RegistryError("registry.package_missing", package=package, reason=exc) from exc
 
     loaded = 0
     for mod in pkgutil.walk_packages(pkg.__path__, prefix=f"{package}."):

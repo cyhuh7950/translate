@@ -38,12 +38,17 @@ from typing import Any
 
 import numpy as np
 
+from ...errors import AppError, listing
+
 # 레지스트리에 등록되는 종류 이름. 새 필터는 이 폴더에 파일을 하나 넣으면 끝난다.
 AUDIO_FILTER_KIND = "audio_filter"
 
 
-class AudioFilterError(Exception):
-    pass
+class AudioFilterError(AppError):
+    """필터 설정이 잘못됐거나 입력을 다루지 못했다."""
+
+    default_code = "audio_filter.failed"
+    default_status = 500
 
 
 @dataclass
@@ -69,8 +74,9 @@ def need(settings: dict, key: str, name: str) -> Any:
     """
     if key not in settings:
         raise AudioFilterError(
-            f"Audio filter '{name}' requires the '{key}' setting. "
-            f"Add it under the audio_filter: section of defaults.yaml "
-            f"(present: {', '.join(sorted(settings)) or 'none'})"
+            "audio_filter.setting_required",
+            implementation=name,
+            setting=key,
+            present=listing(sorted(settings)),
         )
     return settings[key]

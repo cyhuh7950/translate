@@ -68,14 +68,16 @@ _RMS_FLOOR = 1e-10
 class DominantGate:
     def __init__(self, settings: dict, sample_rate: int):
         if sample_rate <= 0:
-            raise AudioFilterError(f"sample_rate must be positive (got {sample_rate})")
+            raise AudioFilterError(
+                "audio_filter.sample_rate_invalid", sample_rate=sample_rate
+            )
         self._sr = int(sample_rate)
 
         g = lambda key: need(settings, key, "dominant_gate")  # noqa: E731
 
         frame_ms = float(g("frame_ms"))
         if frame_ms <= 0:
-            raise AudioFilterError("audio_filter.frame_ms must be positive")
+            raise AudioFilterError("audio_filter.frame_ms_invalid")
         self._frame = max(1, round(self._sr * frame_ms / 1000.0))
         # 반올림된 프레임 크기로 실제 프레임 길이를 다시 계산한다.
         # 그러지 않으면 hold 길이와 잘라낸 길이 보고가 조금씩 어긋난다.
@@ -83,24 +85,22 @@ class DominantGate:
 
         self._drop_db = float(g("drop_db"))
         if self._drop_db <= 0:
-            raise AudioFilterError("audio_filter.drop_db must be positive")
+            raise AudioFilterError("audio_filter.drop_db_invalid")
 
         hold_ms = float(g("hold_ms"))
         if hold_ms < 0:
-            raise AudioFilterError("audio_filter.hold_ms must not be negative")
+            raise AudioFilterError("audio_filter.hold_ms_invalid")
         self._hold_frames = int(round(hold_ms / self._ms_per_frame))
 
         top = float(g("reference_top_percent"))
         if not 0 < top <= 100:
-            raise AudioFilterError(
-                f"audio_filter.reference_top_percent must be in (0, 100] (got {top})"
-            )
+            raise AudioFilterError("audio_filter.reference_top_invalid", value=top)
         # numpy 의 percentile 은 "아래에서부터"라 상위 5% → 95 분위수가 된다.
         self._ref_percentile = 100.0 - top
 
         min_ms = float(g("min_duration_ms"))
         if min_ms < 0:
-            raise AudioFilterError("audio_filter.min_duration_ms must not be negative")
+            raise AudioFilterError("audio_filter.min_duration_invalid")
         self._min_frames = max(1, int(round(min_ms / self._ms_per_frame)))
 
     # ---- 계약 -------------------------------------------------------------

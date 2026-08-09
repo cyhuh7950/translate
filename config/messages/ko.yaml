@@ -1,0 +1,190 @@
+# 오류 문구 카탈로그 — 한국어. **번역본이다.**
+#
+# 원본은 en.yaml 이고, 여기 없는 키는 en 으로 폴백한다. 그러므로 이 파일은
+# 언제 비어 있어도 서버가 동작한다. 새 코드는 en.yaml 에 먼저 넣는다.
+#
+# 치환 이름(`{engine_id}` 등)은 en.yaml 과 같아야 한다. 이름을 바꾸면 그 문구만
+# 진단 문자열로 떨어진다.
+
+# ---- 인증 -------------------------------------------------------------------
+auth.invalid_key: "API 키가 올바르지 않습니다"
+
+# ---- 요청 본문 --------------------------------------------------------------
+audio.empty: "오디오가 비어 있습니다"
+audio.too_large: "오디오가 너무 큽니다 ({size} > {limit} 바이트)"
+audio.decode_timeout: "{decoder} 가 {timeout}초 안에 끝나지 않았습니다"
+audio.decode_failed: "{decoder} 가 {status_code} 로 종료했습니다: {reason}"
+audio.decode_empty: "{decoder} 가 오디오 샘플을 하나도 내놓지 않았습니다"
+text.too_long: "텍스트가 너무 깁니다 ({length} > {limit}자)"
+request.stream_with_audio: >-
+  stream 과 with_audio 는 함께 쓸 수 없습니다. 스트리밍 응답은 토큰만 흘려보내는
+  본문이라 오디오를 실을 자리가 없습니다. 소리까지 흘려보내려면 WebSocket
+  엔드포인트({path})를 쓰거나, 둘 중 하나를 빼 주세요
+
+# ---- 설정 -------------------------------------------------------------------
+config.invalid: "설정을 쓸 수 없습니다"
+config.dir_env_required: >-
+  환경변수 {env} 가 필요합니다. 설정 디렉터리 경로를 지정해 주세요 (예: /config)
+config.dir_missing: "설정 디렉터리가 없습니다: {path}"
+config.dir_empty: "설정 디렉터리에서 읽을 내용이 없습니다: {path}"
+config.parse_failed: "{file} 을(를) 해석하지 못했습니다: {reason}"
+config.not_mapping: "{file} 의 최상위는 맵이어야 합니다"
+config.env_conflict: "환경변수의 설정 경로가 충돌합니다: {key}"
+config.missing_value: >-
+  설정값이 없습니다: '{path}'. {dir}/defaults.yaml 에 추가하거나 {env} 로 주입해 주세요
+config.not_a_section: "'{path}' 는 맵이어야 합니다 (받은 값: {type})"
+languages.no_code: "languages 항목에 code 가 없습니다"
+
+# ---- 엔진 -------------------------------------------------------------------
+engine.failed: "엔진 호출에 실패했습니다"
+engine.unknown: "그런 엔진이 없습니다: '{engine_id}'. 사용 가능: {available}"
+engine.unreachable: "엔진 '{engine_id}' 에 닿지 못했습니다: {reason}"
+engine.not_ready: "엔진 '{engine_id}' 이(가) 아직 준비되지 않았습니다: {reason}"
+engine.none_available: >-
+  '{mode}' 모드를 지원하는 {kind} 엔진이 지금 하나도 없습니다. 엔진이 떠 있는지,
+  engines.yaml 의 modes 에 '{mode}' 가 들어 있는지 확인해 주세요
+engine.mode_unsupported: >-
+  엔진 '{engine_id}' 은(는) '{mode}' 모드를 지원하지 않습니다 (지원: {supported}).
+  engines.yaml 의 modes 를 확인하거나 다른 엔진을 골라 주세요
+engine.explicit_required: >-
+  routing.policy 가 'explicit' 이므로 세션이 {kind} 엔진을 지정해야 합니다
+engine.no_endpoint_match: >-
+  엔진 '{engine_id}' 에 지금 조건에 맞는 엔드포인트가 없습니다 (조건={context})
+engine.endpoint_no_url: "엔진 '{engine_id}' 의 엔드포인트에 url 이 없습니다"
+engine.no_id: "engines 항목에 id 가 없습니다"
+engine.no_kind: "엔진 '{engine_id}' 에 kind 가 없습니다"
+engine.no_endpoints: "엔진 '{engine_id}' 에 endpoints 가 없습니다"
+engine.no_modes: >-
+  엔진 '{engine_id}' 에 modes 가 없습니다. 실측 성능을 보고 운영자가 정해야 하는
+  값이라 시스템이 짐작하지 않습니다
+engine.no_adapter: >-
+  엔진 '{engine_id}' 에 adapter 가 없습니다. 그 엔진의 API 방언을 지정해 주세요
+engine.not_a_list: "engines 는 목록이어야 합니다"
+engine.duplicate_id: "엔진 id 가 중복됩니다: {engine_id}"
+engine.stt_failed: "음성 인식 오류 {status_code}"
+engine.stt_failed_detail: "음성 인식 오류 {status_code}: {body}"
+engine.tts_failed: "음성 합성 오류 {status_code}"
+engine.tts_failed_detail: "음성 합성 오류 {status_code}: {body}"
+engine.speaker_unreachable: "화자 엔진에 닿지 못했습니다 ({error}): {reason}"
+engine.speaker_failed: "화자 엔진이 {status_code} 를 돌려줬습니다"
+engine.speaker_failed_detail: "화자 엔진이 {status_code} 를 돌려줬습니다: {body}"
+
+# ---- 세션과 프로필 ----------------------------------------------------------
+session.invalid: "요청한 대로 세션을 만들 수 없습니다"
+session.unknown_participant: "그런 참여자가 없습니다: '{participant}'"
+session.no_listeners: "참여자 '{speaker}' 의 output 이 비어 있어 전달할 곳이 없습니다"
+session.no_input_participant: "입력을 받는 참여자가 없습니다"
+session.missing_variable: >-
+  프로필이 요구하는 값이 넘어오지 않았습니다: '{key}'. 사용 가능: {available}
+profile.unknown: "그런 프로필이 없습니다: '{profile}'"
+profile.no_participants: "프로필 '{profile}' 에 participants 가 없습니다"
+profile.no_speaker_id: "프로필 '{profile}' 에 speaker_id 가 없습니다"
+profile.speaker_id_unregistered: >-
+  프로필 '{profile}' 은(는) 화자 식별 구현 '{implementation}' 이 필요한데 등록돼
+  있지 않습니다 (사용 가능: {available})
+
+# ---- 화자 식별 --------------------------------------------------------------
+speaker.unresolved: "말한 사람을 정하지 못했습니다"
+speaker.no_input_participant: "입력을 받는 참여자가 없습니다 (전부 input: false 입니다)"
+speaker.hint_not_input: >-
+  '{hint}' 은(는) 이 세션에서 입력을 받는 참여자가 아닙니다 (사용 가능: {available})
+speaker.ambiguous: >-
+  말한 사람을 정할 수 없습니다. 입력을 받는 참여자가 여럿({available})이므로 요청에
+  speaker 를 지정하거나, 자동으로 알아내는 화자 식별 구현(예: voice_print)을 써 주세요
+speaker.bad_return: >-
+  화자 식별 '{implementation}' 이(가) {type} 을(를) 돌려줬습니다. 참여자 id 나
+  Decision 을 돌려줘야 합니다
+speaker.needs_pipeline_context: >-
+  voice_print 는 파이프라인 컨텍스트(엔진·저장소·설정)가 있어야 합니다. 번역
+  파이프라인 밖에서는 쓸 수 없습니다
+speaker.enroll_needs_files: >-
+  '{speaker_id}' 등록에는 비어 있지 않은 오디오 파일이 최소 {minimum}개 필요한데
+  {count}개가 들어왔습니다 (speaker_id.min_enroll_files)
+speaker.enroll_spread_low: >-
+  올린 발화들의 유사도가 {similarity} 로, 일치 임계값 {threshold} 보다 낮습니다.
+  전부 같은 사람이 아닐 수 있습니다
+
+# ---- 등록된 목소리 ----------------------------------------------------------
+voiceprint.failed: "목소리 저장소를 쓸 수 없습니다"
+voiceprint.store_not_configured: "speaker_id.store_path 가 설정돼 있지 않습니다"
+voiceprint.store_unreadable: >-
+  {path} 의 목소리 저장소를 읽지 못해({reason}) 덮어쓰지 않았습니다. 파일을 고치거나
+  지운 뒤 다시 불러와 주세요
+voiceprint.speaker_required: "화자 id 가 필요합니다"
+voiceprint.empty_embedding: "엔진이 빈 임베딩을 돌려줬습니다"
+voiceprint.not_enrolled: "'{speaker_id}' 로 등록된 목소리가 없습니다"
+
+# ---- LLM --------------------------------------------------------------------
+llm.unknown_provider: "그런 프로바이더가 없습니다: '{provider}'. 사용 가능: {available}"
+llm.no_provider: >-
+  LLM 프로바이더가 지정되지 않았습니다. 요청에 provider 를 넣거나 defaults.yaml 의
+  llm.default_provider 를 지정해 주세요
+llm.unknown_style: "그런 번역 스타일이 없습니다: '{style}' (사용 가능: {available})"
+llm.no_base_url: "프로바이더 '{provider}' 에 base_url 이 없습니다"
+llm.no_model: >-
+  프로바이더 '{provider}' 의 모델이 지정되지 않았습니다. 요청에 model 을 넣거나
+  providers.yaml 의 default_model 을 지정해 주세요
+llm.provider_failed: "{provider} 응답 오류 {status_code}"
+llm.provider_failed_detail: "{provider} 응답 오류 {status_code}: {body}"
+
+# ---- 음성 활동 감지 / 배경음 게이트 -----------------------------------------
+vad.failed: "음성 구간 판정에 실패했습니다 ({error}): {reason}"
+vad.sample_rate_invalid: "sample_rate 는 양수여야 합니다 (받은 값: {sample_rate})"
+vad.frame_ms_invalid: "vad.frame_ms 는 양수여야 합니다"
+vad.setting_required: >-
+  VAD 백엔드 '{backend}' 에는 '{setting}' 설정이 필요합니다. defaults.yaml 의 vad:
+  아래에 추가해 주세요 (현재: {present})
+audio_filter.failed: "오디오 필터를 쓸 수 없습니다"
+audio_filter.sample_rate_invalid: "sample_rate 는 양수여야 합니다 (받은 값: {sample_rate})"
+audio_filter.frame_ms_invalid: "audio_filter.frame_ms 는 양수여야 합니다"
+audio_filter.drop_db_invalid: "audio_filter.drop_db 는 양수여야 합니다"
+audio_filter.hold_ms_invalid: "audio_filter.hold_ms 는 음수일 수 없습니다"
+audio_filter.min_duration_invalid: "audio_filter.min_duration_ms 는 음수일 수 없습니다"
+audio_filter.reference_top_invalid: >-
+  audio_filter.reference_top_percent 는 (0, 100] 범위여야 합니다 (받은 값: {value})
+audio_filter.setting_required: >-
+  오디오 필터 '{implementation}' 에는 '{setting}' 설정이 필요합니다. defaults.yaml 의
+  audio_filter: 아래에 추가해 주세요 (현재: {present})
+
+# ---- 레지스트리와 모듈 (운영 오류) ------------------------------------------
+registry.failed: "구현 레지스트리가 이 요청을 처리하지 못했습니다"
+registry.duplicate: >-
+  이미 등록된 구현입니다: {kind}/{name} ({existing} vs {incoming}). 다른 이름을 써 주세요
+registry.name_empty: "{kind} 구현 이름이 비어 있습니다. 설정을 확인해 주세요"
+registry.unknown: "등록되지 않은 {kind} 구현입니다: '{name}'. 사용 가능: {available}"
+registry.package_missing: "훑을 패키지를 찾지 못했습니다: {package} ({reason})"
+module.failed: "모듈을 조립하지 못했습니다"
+module.duplicate: "이미 등록된 모듈입니다: {name} ({existing} vs {incoming}). 다른 이름을 써 주세요"
+module.section_conflict: >-
+  모듈 '{owner}' 과(와) '{module}' 이(가) /v1/config 의 '{section}' 섹션을 둘 다
+  내놓습니다. 한쪽 이름을 바꿔 주세요
+
+# ---- 스트리밍 (WebSocket) ---------------------------------------------------
+stream.failed: "스트림을 이어가지 못했습니다"
+stream.config_timeout: >-
+  {timeout}초 안에 config 메시지가 오지 않았습니다. {{"type":"config", ...}} 를 먼저
+  보내 주세요
+stream.config_required: >-
+  첫 메시지는 바이너리 오디오가 아니라 JSON {{"type":"config", ...}} 이어야 합니다
+stream.config_type: '첫 메시지에는 "type":"config" 가 있어야 합니다'
+stream.already_configured: >-
+  이 세션은 이미 설정됐습니다. 바꾸려면 연결을 새로 열어 주세요
+stream.bad_json: "메시지를 해석하지 못했습니다: {reason}"
+stream.bad_message: "메시지는 JSON 객체여야 합니다"
+stream.unknown_message: "모르는 메시지 종류입니다: '{type}'"
+stream.unknown_action: "모르는 control 동작입니다: '{action}'"
+stream.language_required: "config 에 source_lang 과 target_lang 이 있어야 합니다"
+stream.sample_rate: >-
+  이 서버는 {expected} Hz PCM16 모노를 기대하는데(audio.stt_sample_rate) 클라이언트가
+  {declared} 를 선언했습니다
+stream.setup_failed: "스트림을 준비하지 못했습니다: {reason}"
+
+# ---- 파이프라인 -------------------------------------------------------------
+pipeline.failed: "처리에 실패했습니다 ({error}): {reason}"
+
+# ---- 그 밖 ------------------------------------------------------------------
+internal.error: "예상하지 못한 이유로 요청을 처리하지 못했습니다"
+http.error: "요청을 처리하지 못했습니다 ({status}): {detail}"
+http.404: "그런 엔드포인트가 없습니다: {method} {path}"
+http.405: "{path} 에서는 {method} 를 쓸 수 없습니다"
+http.422: "요청 본문이 올바르지 않습니다 — {summary}"

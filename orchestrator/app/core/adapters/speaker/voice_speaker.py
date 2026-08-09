@@ -21,6 +21,8 @@ from typing import Any, Sequence
 
 import httpx
 
+from ... import upstream
+from ...errors import AppError
 from ...registry import register
 
 # 엔진 종류 이름. engines.yaml 의 `kind: speaker` 와 같은 값이어야 한다.
@@ -30,18 +32,25 @@ SPEAKER_KIND = "speaker"
 FileTuple = tuple[str, bytes, str]
 
 
-class SpeakerEngineError(RuntimeError):
-    """엔진이 거절했거나 닿지 않았다. status 가 없으면 네트워크 단계에서 실패한 것이다."""
+class SpeakerEngineError(AppError, RuntimeError):
+    """
+    엔진이 거절했거나 닿지 않았다.
 
-    def __init__(self, message: str, status: int | None = None):
-        super().__init__(message)
-        self.status = status
+    RuntimeError 도 함께 상속하는 이유는 이 예외를 RuntimeError 로 잡는 곳이
+    있었기 때문이다. 잡는 쪽을 한꺼번에 고치지 않고도 코드가 실리게 한다.
+    """
+
+    default_code = "engine.speaker_failed"
+    default_status = 502
 
 
 @register(SPEAKER_KIND, "voice_speaker")
 class VoiceSpeaker:
-    def __init__(self, http: dict):
+    def __init__(self, http: dict, *, expose_upstream_errors: bool):
         self._http = http
+        # 엔진이 돌려준 오류 본문을 클라이언트에 보여도 되는가.
+        # 기본값은 코드가 아니라 diagnostics.expose_upstream_errors 에 있다.
+        self._expose = bool(expose_upstream_errors)
 
     def _timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -58,10 +67,16 @@ class VoiceSpeaker:
             async with httpx.AsyncClient(timeout=self._timeout()) as c:
                 r = await c.post(url, headers=self._headers(api_key), files=files)
         except httpx.HTTPError as exc:
-            raise SpeakerEngineError(f"{type(exc).__name__}: {exc}") from exc
-        if r.status_code >= 400:
             raise SpeakerEngineError(
-                f"speaker engine returned {r.status_code}: {r.text[:300]}", r.status_code
+                "engine.speaker_unreachable", error=type(exc).__name__, reason=exc
+            ) from exc
+        if r.status_code >= 400:
+            raise upstream.failure(
+                SpeakerEngineError,
+                "engine.speaker_failed",
+                body=r.text[:300],
+                expose=self._expose,
+                status_code=r.status_code,
             )
         return r.json()
 

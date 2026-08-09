@@ -46,13 +46,17 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ... import registry
+from ...errors import AppError, listing
 
 # 레지스트리에 등록되는 종류 이름. 새 구현은 이 폴더에 파일 하나를 넣으면 끝난다.
 SPEAKER_ID_KIND = "speaker_id"
 
 
-class SpeakerIdError(Exception):
+class SpeakerIdError(AppError):
     """식별을 시도조차 할 수 없다 — 설정이나 요청이 잘못됐다."""
+
+    default_code = "speaker.unresolved"
+    default_status = 400
 
 
 @dataclass
@@ -110,7 +114,7 @@ def input_ids(participants: Sequence[dict]) -> list[str]:
     """입력을 받는 참여자 id 들. 후보는 항상 이 목록이다."""
     ids = [p["id"] for p in participants if p.get("input")]
     if not ids:
-        raise SpeakerIdError("No participant accepts input (all have input: false)")
+        raise SpeakerIdError("speaker.no_input_participant")
     return ids
 
 
@@ -125,21 +129,13 @@ def by_hint(participants: Sequence[dict], hint: str | None) -> str:
 
     if hint:
         if hint not in ids:
-            raise SpeakerIdError(
-                f"'{hint}' is not an input-accepting participant in this session "
-                f"(available: {', '.join(ids)})"
-            )
+            raise SpeakerIdError("speaker.hint_not_input", hint=hint, available=listing(ids))
         return hint
 
     if len(ids) == 1:
         return ids[0]
 
-    raise SpeakerIdError(
-        f"Cannot determine the speaker. There are multiple input participants "
-        f"({', '.join(ids)}), so specify speaker in the request or use a "
-        f"speaker_id implementation that can identify it automatically "
-        f"(e.g. voice_print)"
-    )
+    raise SpeakerIdError("speaker.ambiguous", available=listing(ids))
 
 
 def static_speaker(participants: Sequence[dict], hint: str | None) -> str | None:
@@ -175,6 +171,5 @@ async def identify(
     if isinstance(outcome, str) and outcome:
         return Decision(speaker=outcome)
     raise SpeakerIdError(
-        f"Speaker identification '{name}' returned {type(outcome).__name__}. "
-        f"It must return a participant id or a Decision"
+        "speaker.bad_return", status=500, implementation=name, type=type(outcome).__name__
     )

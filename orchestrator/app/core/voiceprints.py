@@ -35,6 +35,7 @@ import numpy as np
 from . import enginecall
 from .config import Config
 from .engines import EngineRegistry
+from .errors import AppError
 
 log = logging.getLogger("voiceprints")
 
@@ -45,8 +46,11 @@ SPEAKER_KIND = "speaker"
 STORE_VERSION = 1
 
 
-class VoicePrintError(Exception):
-    pass
+class VoicePrintError(AppError):
+    """등록된 목소리 저장소를 읽거나 쓰지 못했다."""
+
+    default_code = "voiceprint.failed"
+    default_status = 500
 
 
 def _now() -> str:
@@ -174,12 +178,9 @@ class VoicePrintStore:
     def _save(self) -> None:
         path = self._path
         if path is None:
-            raise VoicePrintError("speaker_id.store_path is not configured")
+            raise VoicePrintError("voiceprint.store_not_configured")
         if self._error:
-            raise VoicePrintError(
-                f"The voice print store at {path} could not be read ({self._error}), so it "
-                f"will not be overwritten. Fix or remove the file, then reload"
-            )
+            raise VoicePrintError("voiceprint.store_unreadable", path=path, reason=self._error)
         path.parent.mkdir(parents=True, exist_ok=True)
         body = {
             "version": STORE_VERSION,
@@ -258,10 +259,10 @@ class VoicePrintStore:
     ) -> VoicePrint:
         """등록하거나 갱신한다. 같은 id 가 있으면 통째로 대체한다."""
         if not speaker_id:
-            raise VoicePrintError("A speaker id is required")
+            raise VoicePrintError("voiceprint.speaker_required", status=400)
         vec = [float(x) for x in embedding]
         if not vec:
-            raise VoicePrintError("The engine returned an empty embedding")
+            raise VoicePrintError("voiceprint.empty_embedding", status=502)
 
         self._ensure()
         with self._lock:

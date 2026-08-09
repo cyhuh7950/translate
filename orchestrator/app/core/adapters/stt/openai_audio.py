@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from ... import upstream
+from ...engines import EngineError
 from ...registry import register
 
 STT_KIND = "stt"
@@ -20,8 +22,11 @@ STT_KIND = "stt"
 
 @register(STT_KIND, "openai_audio")
 class OpenAIAudioSTT:
-    def __init__(self, http: dict):
+    def __init__(self, http: dict, *, expose_upstream_errors: bool):
         self._http = http
+        # 엔진이 돌려준 오류 본문을 클라이언트에 보여도 되는가.
+        # 기본값은 코드가 아니라 diagnostics.expose_upstream_errors 에 있다.
+        self._expose = bool(expose_upstream_errors)
 
     def _timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -51,7 +56,13 @@ class OpenAIAudioSTT:
                 f"{url}/v1/audio/transcriptions", headers=headers, files=files, data=data
             )
             if r.status_code >= 400:
-                raise RuntimeError(f"STT error {r.status_code}: {r.text[:300]}")
+                raise upstream.failure(
+                    EngineError,
+                    "engine.stt_failed",
+                    body=r.text[:300],
+                    expose=self._expose,
+                    status_code=r.status_code,
+                )
             body = r.json()
 
         return {

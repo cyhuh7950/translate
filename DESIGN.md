@@ -523,21 +523,54 @@ label:                    # 로케일별. en 이 폴백이다.
 로케일 결정 순서: **`?locale=` 쿼리 > `Accept-Language` 헤더 > `en`.**
 요청한 로케일에 번역이 없으면 조용히 영어로 떨어지고, 응답에는 요청받은 로케일을 그대로 돌려준다.
 
-**남은 과제 — 최종 목표는 모든 문구를 사용자 언어로 내보내는 것이다.**
-지금은 설정의 label/description 만 지역화되고 오류 메시지는 영어 고정이다.
-완전 지역화하려면 오류에 **메시지 코드와 파라미터**를 붙여 클라이언트가 자기 카탈로그로
-문장을 만들게 해야 한다.
+#### 오류 문구도 설정이다
 
-```jsonc
-// 지금
-{ "detail": "Unknown engine: 'x'. Available: whisper, moonshine" }
-// 목표
-{ "code": "engine.unknown", "params": { "id": "x", "available": ["whisper", "moonshine"] },
-  "message": "Unknown engine: 'x'. ..." }   // message 는 영어 폴백
+**서버가 만드는 오류 문구는 소스에 없다.** 코드는 `<영역>.<사유>` 형태의 **코드**와
+치환 **파라미터**만 만들고, 문장은 `config/messages/<locale>.yaml` 에서 온다.
+`en.yaml` 이 완전한 원본이고 나머지는 번역본이라 빠진 키는 en 으로 폴백한다.
+`label`/`description` 과 같은 규칙(기본어는 영어)이고, 같은 핫 리로드 경로를 탄다.
+
+```yaml
+# config/messages/en.yaml
+engine.unreachable: "Cannot reach engine '{engine_id}': {reason}"
+```
+```python
+raise EngineError("engine.unreachable", engine_id=eid, reason=str(exc))
 ```
 
-`message` 를 남겨두면 카탈로그가 없는 클라이언트도 동작한다. 웹 클라이언트(1단계 ④)는
-자체 로케일 파일을 갖고, 그때 이 코드 체계를 함께 도입한다.
+HTTP 응답 봉투는 이렇게 나간다. 봉투를 만드는 곳은 `server.py` 의 예외 핸들러 **한 곳**이고,
+라우트는 코드와 파라미터를 든 예외를 던지기만 한다.
+
+```jsonc
+{
+  "detail": "Audio is too large (5000000 > 4194304 bytes)",   // 요청 로케일로 렌더된 문장
+  "error": { "code": "audio.too_large", "params": { "size": 5000000, "limit": 4194304 } }
+}
+```
+
+  - **`detail` 은 문자열로 유지한다.** 기존 클라이언트와 `curl` 사용자가 이것 하나만
+    보고 동작하기 때문이다. 기계가 읽을 것은 옆에 `error` 로 따로 싣는다.
+  - **렌더는 서버가 한다.** 클라이언트가 자기 카탈로그로 문장을 만들게 하면 카탈로그가
+    두 벌이 되고, 서버에 코드를 하나 추가할 때마다 모든 클라이언트가 따라와야 한다.
+    클라이언트는 자기 로케일만 실어 보내면 된다(`?locale=`, WS `config` 의 `locale`).
+    클라이언트 자체 오류(마이크 거부 등)는 여전히 클라이언트 카탈로그를 쓴다.
+  - 문구가 없거나 파라미터가 모자라도 **죽지 않는다.** 진단 문자열
+    (`[missing message template: ...]`)을 돌려주고 경고 로그를 남긴다.
+    그 사고는 배포 전에 `orchestrator/tools/check_messages.py` 가 잡는다.
+
+#### 상류 오류 본문은 기본적으로 나가지 않는다
+
+엔진·LLM 프로바이더가 돌려준 **응답 본문**은 우리 것이 아니다. 실제로 프로바이더 본문에는
+조직 식별자(`org_...`), 모델명, 요금제 티어, 레이트리밋 한도가 들어 있었다. API 키를 가진
+클라이언트라면 누구나 보게 되므로 **기본은 감춘다**.
+
+  - 본문은 이 설정과 무관하게 **언제나 서버 로그에 남는다.** 끄더라도 디버깅 능력은
+    그대로다. 스위치가 정하는 것은 "부르는 쪽에도 보여줄 것인가"뿐이다.
+  - 켜려면 `diagnostics.expose_upstream_errors: true` (`save_segments` 와 같은 성격의
+    디버깅 스위치다). 문제를 재현하는 동안만 켠다.
+  - 코드가 두 벌이다 — `engine.stt_failed` / `engine.stt_failed_detail`. 본문이 없을 때
+    문장 끝에 콜론만 남지 않게 하기 위해서다. `params` 에도 `body` 를 넣지 않는다.
+  - 규칙은 `app/core/upstream.py` 한 곳에 있고, STT·TTS·화자 엔진·LLM 이 모두 그것을 쓴다.
 
 ### 설정 가능 항목 (구현 시 체크리스트)
 
@@ -556,6 +589,7 @@ label:                    # 로케일별. en 이 폴백이다.
 | **세션 구성** | 세션 프로필 목록(단방향·양방향 등), 참여자 수와 언어, 화자 식별 방식, 프로필 없이 직접 지정 |
 | **엔진 위치** | STT·TTS 를 기기에서 돌릴지 서버 API 를 쓸지 (앱 클라이언트). 조합 4가지 모두 |
 | **표시 언어** | UI 로케일, 로케일 목록, 폴백(en). 번역 언어와 별개의 축 |
+| **오류 문구** | 서버가 만드는 모든 오류 문장. 코드는 `<영역>.<사유>` 코드와 파라미터만 만든다 (`config/messages/*.yaml`) |
 | **라우팅** | 정책(explicit / mode_first / nearest / fallback), 후보 우선순위 |
 | **오디오** | 입력 샘플레이트·프레임 크기, 출력 포맷·샘플레이트 |
 | **인증** | API 키, 인증 방식, `/health` 공개 여부, CORS 허용 출처 |
@@ -879,7 +913,7 @@ Raspberry Pi 급에서도 돈다. 즉 모바일 앱은 이 둘을 앱 안에 넣
 {"type":"tts.chunk",  "seg":1, "to":"b", "seq":0, "sr":24000}     // 직후 바이너리 프레임
 {"type":"tts.done",   "seg":1, "to":"b"}
 {"type":"metrics",    "seg":1, "stt_ms":620, "llm_ttft_ms":310, "tts_ttfa_ms":540}
-{"type":"error",      "code":"...", "message":"..."}
+{"type":"error",      "code":"engine.unreachable", "message":"...", "params":{...}}
 ```
 
 **모든 이벤트에 `from`/`to` 참여자 id 가 붙는다.** 단방향에서도 마찬가지다.
@@ -887,6 +921,10 @@ Raspberry Pi 급에서도 돈다. 즉 모바일 앱은 이 둘을 앱 안에 넣
 다중 기기 토폴로지에서는 클라이언트가 자기 `to` 인 오디오만 재생하면 된다.
 
 오디오는 base64 가 아니라 **바이너리 프레임**으로 보낸다 (base64 는 33% 오버헤드).
+
+`error` 의 `message` 는 **세션 로케일로 렌더된 문장**이다. 세션 로케일은 `config` 메시지의
+`locale` > 핸드셰이크의 `Accept-Language` > `en` 순으로 정해진다. 브라우저는 WS 핸드셰이크에
+헤더를 붙일 수 없으므로 웹 클라이언트는 `config` 에 실어 보낸다.
 
 ### HTTP (ptt / batch)
 

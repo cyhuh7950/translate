@@ -71,6 +71,7 @@ from typing import Any, Callable, TypeVar
 
 from . import registry
 from .config import Config
+from .errors import AppError
 from .engines import EngineRegistry
 from .llm import ProviderRegistry, Translator
 from .sessions import ProfileRegistry
@@ -85,8 +86,11 @@ T = TypeVar("T")
 _MODULES: dict[str, Any] = {}
 
 
-class ModuleError(Exception):
-    pass
+class ModuleError(AppError):
+    """모듈 등록·조립이 잘못됐다. 기동 시점에 드러난다."""
+
+    default_code = "module.failed"
+    default_status = 500
 
 
 @dataclass
@@ -157,8 +161,10 @@ def module(name: str) -> Callable[[T], T]:
     def decorator(cls: T) -> T:
         if name in _MODULES and _MODULES[name] is not cls:
             raise ModuleError(
-                f"Module already registered: {name} ({_MODULES[name]!r} vs {cls!r}). "
-                f"Use a different name"
+                "module.duplicate",
+                name=name,
+                existing=repr(_MODULES[name]),
+                incoming=repr(cls),
             )
         cls.name = name                     # type: ignore[attr-defined]
         _MODULES[name] = cls
@@ -205,8 +211,7 @@ def config_sections(
         for key, value in section.items():
             if key in owner:
                 raise ModuleError(
-                    f"Modules '{owner[key]}' and '{mod.name}' both contribute the "
-                    f"'{key}' section to /v1/config. Rename one of them"
+                    "module.section_conflict", owner=owner[key], module=mod.name, section=key
                 )
             owner[key] = mod.name
             out[key] = value

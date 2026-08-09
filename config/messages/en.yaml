@@ -1,0 +1,204 @@
+# 오류 문구 카탈로그 — 기본어(영어). **이 파일이 원본이다.**
+#
+# 코드에는 문구가 없다. 코드는 `<영역>.<사유>` 형태의 코드와 파라미터만 만들고,
+# 실제 문장은 전부 여기서 온다. 다른 로케일(ko.yaml 등)은 번역본이고, 빠진 키는
+# 이 파일로 폴백한다. 그러므로 **새 코드는 반드시 여기에 먼저 추가한다.**
+#
+# 검증:  python3 orchestrator/tools/check_messages.py
+#   소스가 쓰는 코드가 전부 여기 있는지, 여기 있는데 아무도 안 쓰는 키는 없는지 본다.
+#
+# 치환은 파이썬 str.format 규칙이다. `{name}` 만 쓰고 위치 인자는 쓰지 않는다.
+# 파라미터가 빠져도 서버는 죽지 않고 진단 문구를 돌려준다 (app/core/messages.py).
+#
+# 이 디렉터리는 config/*.yaml 최상위 병합에 섞이지 않는다. 설정 로더는 최상위의
+# *.yaml 만 병합하고, 이 하위 디렉터리는 메시지 카탈로그로만 읽는다.
+
+# ---- 인증 -------------------------------------------------------------------
+auth.invalid_key: "Invalid API key"
+
+# ---- 요청 본문 --------------------------------------------------------------
+audio.empty: "Empty audio"
+audio.too_large: "Audio is too large ({size} > {limit} bytes)"
+audio.decode_timeout: "{decoder} did not finish within {timeout}s"
+audio.decode_failed: "{decoder} exited with {status_code}: {reason}"
+audio.decode_empty: "{decoder} produced no audio samples"
+text.too_long: "Text is too long ({length} > {limit} chars)"
+request.stream_with_audio: >-
+  stream and with_audio cannot be combined: a streamed response is a plain token
+  stream with nowhere to put the audio. Use the WebSocket endpoint ({path}) for
+  streamed speech, or drop one of the two
+
+# ---- 설정 -------------------------------------------------------------------
+config.invalid: "The configuration is not usable"
+config.dir_env_required: >-
+  The {env} environment variable is required. Set it to the config directory path
+  (e.g. /config)
+config.dir_missing: "Config directory not found: {path}"
+config.dir_empty: "No readable content in config directory: {path}"
+config.parse_failed: "Failed to parse {file}: {reason}"
+config.not_mapping: "The top level of {file} must be a mapping"
+config.env_conflict: "Conflicting config path from environment variable: {key}"
+config.missing_value: >-
+  Missing config value: '{path}'. Add it to {dir}/defaults.yaml or inject it via {env}
+config.not_a_section: "'{path}' must be a mapping (got: {type})"
+languages.no_code: "A languages entry has no code"
+
+# ---- 엔진 -------------------------------------------------------------------
+engine.failed: "The engine call did not succeed"
+engine.unknown: "Unknown engine: '{engine_id}'. Available: {available}"
+engine.unreachable: "Cannot reach engine '{engine_id}': {reason}"
+engine.not_ready: "Engine '{engine_id}' is not ready yet: {reason}"
+engine.none_available: >-
+  No {kind} engine is currently available that supports '{mode}' mode. Check that
+  the engine is up and that '{mode}' is listed in modes in engines.yaml
+engine.mode_unsupported: >-
+  Engine '{engine_id}' does not support '{mode}' mode (supported: {supported}).
+  Check modes in engines.yaml or pick another engine
+engine.explicit_required: >-
+  routing.policy is 'explicit', so the session must specify the {kind} engine
+engine.no_endpoint_match: >-
+  Engine '{engine_id}' has no endpoint matching the current conditions (context={context})
+engine.endpoint_no_url: "An endpoint of engine '{engine_id}' has no url"
+engine.no_id: "An engine entry has no id"
+engine.no_kind: "Engine '{engine_id}' has no kind"
+engine.no_endpoints: "Engine '{engine_id}' has no endpoints"
+engine.no_modes: >-
+  Engine '{engine_id}' has no modes. The operator must set them based on measured
+  performance (the system does not infer them)
+engine.no_adapter: >-
+  Engine '{engine_id}' has no adapter. You must specify that engine's API dialect
+engine.not_a_list: "engines must be a list"
+engine.duplicate_id: "Duplicate engine id: {engine_id}"
+engine.stt_failed: "STT error {status_code}"
+engine.stt_failed_detail: "STT error {status_code}: {body}"
+engine.tts_failed: "TTS error {status_code}"
+engine.tts_failed_detail: "TTS error {status_code}: {body}"
+engine.speaker_unreachable: "Cannot reach the speaker engine ({error}): {reason}"
+engine.speaker_failed: "The speaker engine returned {status_code}"
+engine.speaker_failed_detail: "The speaker engine returned {status_code}: {body}"
+
+# ---- 세션과 프로필 ----------------------------------------------------------
+session.invalid: "The session cannot be used as requested"
+session.unknown_participant: "Unknown participant: '{participant}'"
+session.no_listeners: >-
+  Participant '{speaker}' has an empty output, so there is nowhere to deliver to
+session.no_input_participant: "No participant accepts input"
+session.missing_variable: >-
+  Profile requires a value that was not provided: '{key}'. Available: {available}
+profile.unknown: "Unknown profile: '{profile}'"
+profile.no_participants: "Profile '{profile}' has no participants"
+profile.no_speaker_id: "Profile '{profile}' has no speaker_id"
+profile.speaker_id_unregistered: >-
+  Profile '{profile}' needs the speaker identification implementation
+  '{implementation}', which is not registered (available: {available})
+
+# ---- 화자 식별 --------------------------------------------------------------
+speaker.unresolved: "The speaker could not be determined"
+speaker.no_input_participant: "No participant accepts input (all have input: false)"
+speaker.hint_not_input: >-
+  '{hint}' is not an input-accepting participant in this session (available: {available})
+speaker.ambiguous: >-
+  Cannot determine the speaker. There are multiple input participants ({available}),
+  so specify speaker in the request or use a speaker_id implementation that can
+  identify it automatically (e.g. voice_print)
+speaker.bad_return: >-
+  Speaker identification '{implementation}' returned {type}. It must return a
+  participant id or a Decision
+speaker.needs_pipeline_context: >-
+  voice_print needs the pipeline context (engine, store, config). It cannot be used
+  outside the translation pipeline
+speaker.enroll_needs_files: >-
+  Enrolling '{speaker_id}' needs at least {minimum} non-empty audio file(s), got
+  {count} (speaker_id.min_enroll_files)
+speaker.enroll_spread_low: >-
+  The uploaded utterances are only {similarity} alike, which is below the match
+  threshold of {threshold}. They may not all be the same person
+
+# ---- 등록된 목소리 ----------------------------------------------------------
+voiceprint.failed: "The voice print store could not be used"
+voiceprint.store_not_configured: "speaker_id.store_path is not configured"
+voiceprint.store_unreadable: >-
+  The voice print store at {path} could not be read ({reason}), so it will not be
+  overwritten. Fix or remove the file, then reload
+voiceprint.speaker_required: "A speaker id is required"
+voiceprint.empty_embedding: "The engine returned an empty embedding"
+voiceprint.not_enrolled: "No voice print is enrolled for '{speaker_id}'"
+
+# ---- LLM --------------------------------------------------------------------
+llm.unknown_provider: "Unknown provider: '{provider}'. Available: {available}"
+llm.no_provider: >-
+  No LLM provider specified. Pass provider in the request or set llm.default_provider
+  in defaults.yaml
+llm.unknown_style: "Unknown translation style: '{style}' (available: {available})"
+llm.no_base_url: "Provider '{provider}' has no base_url"
+llm.no_model: >-
+  No model specified for provider '{provider}'. Pass model in the request or set
+  default_model in providers.yaml
+llm.provider_failed: "{provider} response error {status_code}"
+llm.provider_failed_detail: "{provider} response error {status_code}: {body}"
+
+# ---- 음성 활동 감지 / 배경음 게이트 -----------------------------------------
+vad.failed: "Voice activity detection failed ({error}): {reason}"
+vad.sample_rate_invalid: "sample_rate must be positive (got {sample_rate})"
+vad.frame_ms_invalid: "vad.frame_ms must be positive"
+vad.setting_required: >-
+  VAD backend '{backend}' requires the '{setting}' setting. Add it under the vad:
+  section of defaults.yaml (present: {present})
+audio_filter.failed: "The audio filter could not be used"
+audio_filter.sample_rate_invalid: "sample_rate must be positive (got {sample_rate})"
+audio_filter.frame_ms_invalid: "audio_filter.frame_ms must be positive"
+audio_filter.drop_db_invalid: "audio_filter.drop_db must be positive"
+audio_filter.hold_ms_invalid: "audio_filter.hold_ms must not be negative"
+audio_filter.min_duration_invalid: "audio_filter.min_duration_ms must not be negative"
+audio_filter.reference_top_invalid: >-
+  audio_filter.reference_top_percent must be in (0, 100] (got {value})
+audio_filter.setting_required: >-
+  Audio filter '{implementation}' requires the '{setting}' setting. Add it under the
+  audio_filter: section of defaults.yaml (present: {present})
+
+# ---- 레지스트리와 모듈 (운영 오류) ------------------------------------------
+registry.failed: "The implementation registry rejected this request"
+registry.duplicate: >-
+  Implementation already registered: {kind}/{name} ({existing} vs {incoming}). Use a
+  different name
+registry.name_empty: "{kind} implementation name is empty. Check your config"
+registry.unknown: "Unregistered {kind} implementation: '{name}'. Available: {available}"
+registry.package_missing: "Package to discover not found: {package} ({reason})"
+module.failed: "A module could not be assembled"
+module.duplicate: "Module already registered: {name} ({existing} vs {incoming}). Use a different name"
+module.section_conflict: >-
+  Modules '{owner}' and '{module}' both contribute the '{section}' section to
+  /v1/config. Rename one of them
+
+# ---- 스트리밍 (WebSocket) ---------------------------------------------------
+stream.failed: "The stream could not continue"
+stream.config_timeout: >-
+  No config message within {timeout}s. Send {{"type":"config", ...}} first
+stream.config_required: >-
+  The first message must be a JSON {{"type":"config", ...}}, not binary audio
+stream.config_type: 'The first message must have "type":"config"'
+stream.already_configured: >-
+  This session is already configured. Open a new connection to change it
+stream.bad_json: "Could not parse the message: {reason}"
+stream.bad_message: "A message must be a JSON object"
+stream.unknown_message: "Unknown message type: '{type}'"
+stream.unknown_action: "Unknown control action: '{action}'"
+stream.language_required: "config must include source_lang and target_lang"
+stream.sample_rate: >-
+  This server expects PCM16 mono at {expected} Hz (audio.stt_sample_rate), but the
+  client declared {declared}
+stream.setup_failed: "The stream could not be set up: {reason}"
+
+# ---- 파이프라인 -------------------------------------------------------------
+pipeline.failed: "Processing failed ({error}): {reason}"
+
+# ---- 그 밖 ------------------------------------------------------------------
+#
+# `http.*` 는 프레임워크가 만든 응답(없는 경로, 허용되지 않은 메서드, 본문 검증)에
+# 붙는다. 코드가 `http.<상태코드>` 로 조립되므로 여기에 상태코드를 추가하면
+# 소스를 고치지 않고도 그 상태에 문구가 붙는다. 없는 상태는 http.error 로 떨어진다.
+internal.error: "The request failed for an unexpected reason"
+http.error: "The request failed ({status}): {detail}"
+http.404: "There is no such endpoint: {method} {path}"
+http.405: "{method} is not allowed on {path}"
+http.422: "The request body is not valid — {summary}"

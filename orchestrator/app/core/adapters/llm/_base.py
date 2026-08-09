@@ -21,23 +21,39 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ... import upstream
+from ...errors import AppError
+
 log = logging.getLogger("llm")
 
 
-class LLMError(Exception):
-    pass
+class LLMError(AppError):
+    """프로바이더를 고르지 못했거나 프로바이더가 실패했다."""
+
+    default_code = "llm.provider_failed"
+    default_status = 502
 
 
 class BaseLLM:
     """프로바이더 하나에 대응한다. providers.yaml 의 항목이 그대로 spec 으로 들어온다."""
 
-    def __init__(self, provider_id: str, spec: dict, settings: dict):
+    def __init__(
+        self,
+        provider_id: str,
+        spec: dict,
+        settings: dict,
+        *,
+        expose_upstream_errors: bool,
+    ):
         self.id = provider_id
         self.spec = spec
         self.settings = settings          # llm.* 설정 (temperature, timeout 등)
+        # 프로바이더가 돌려준 오류 본문을 클라이언트에 보여도 되는가.
+        # 기본값은 코드가 아니라 diagnostics.expose_upstream_errors 에 있다.
+        self._expose = bool(expose_upstream_errors)
         self.base_url = (spec.get("base_url") or "").rstrip("/")
         if not self.base_url:
-            raise LLMError(f"Provider '{provider_id}' has no base_url")
+            raise LLMError("llm.no_base_url", provider=provider_id)
 
     # ---- 공통 도우미 -------------------------------------------------------
 
@@ -49,10 +65,7 @@ class BaseLLM:
     def resolve_model(self, requested: str | None) -> str:
         model = (requested or self.spec.get("default_model") or "").strip()
         if not model:
-            raise LLMError(
-                f"No model specified for provider '{self.id}'. "
-                f"Pass model in the request or set default_model in providers.yaml"
-            )
+            raise LLMError("llm.no_model", status=400, provider=self.id)
         return model
 
     def _timeout(self) -> httpx.Timeout:
@@ -62,8 +75,16 @@ class BaseLLM:
     async def _raise_for_status(self, r: httpx.Response) -> None:
         if r.status_code < 400:
             return
-        body = r.text[:400] if r.content else ""
-        raise LLMError(f"{self.id} response error {r.status_code}: {body}")
+        # 본문은 언제나 로그로 가고, 클라이언트에 보일지는 설정이 정한다.
+        # 프로바이더 오류 본문에는 조직 식별자·요금제·레이트리밋 한도가 섞여 있다.
+        raise upstream.failure(
+            LLMError,
+            "llm.provider_failed",
+            body=r.text[:400] if r.content else "",
+            expose=self._expose,
+            provider=self.id,
+            status_code=r.status_code,
+        )
 
     @staticmethod
     async def _iter_sse(r: httpx.Response) -> AsyncIterator[dict]:

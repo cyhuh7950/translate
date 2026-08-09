@@ -15,6 +15,7 @@ from typing import AsyncIterator
 from . import registry
 from .adapters.llm._base import BaseLLM, LLMError
 from .config import Config
+from .errors import listing
 
 log = logging.getLogger("llm")
 
@@ -42,25 +43,29 @@ class ProviderRegistry:
         providers = self._cfg.require_section("providers")
         if provider_id not in providers:
             raise LLMError(
-                f"Unknown provider: '{provider_id}'. "
-                f"Available: {', '.join(providers) or '(none)'}"
+                "llm.unknown_provider",
+                status=400,
+                provider=provider_id,
+                available=listing(providers),
             )
         return providers[provider_id]
 
     def get(self, provider_id: str | None) -> BaseLLM:
         pid = (provider_id or self._cfg.get("llm.default_provider") or "").strip()
         if not pid:
-            raise LLMError(
-                "No LLM provider specified. "
-                "Pass provider in the request or set llm.default_provider in defaults.yaml"
-            )
+            raise LLMError("llm.no_provider", status=400)
         if pid in self._cache:
             return self._cache[pid]
 
         spec = self._spec(pid)
         kind = spec.get("kind", "")
         adapter_cls = registry.resolve(LLM_KIND, kind)   # 분기문 없이 이름으로
-        instance = adapter_cls(pid, spec, self._cfg.require_section("llm"))
+        instance = adapter_cls(
+            pid,
+            spec,
+            self._cfg.require_section("llm"),
+            expose_upstream_errors=bool(self._cfg.get("diagnostics.expose_upstream_errors")),
+        )
         self._cache[pid] = instance
         return instance
 
@@ -110,7 +115,7 @@ class Translator:
         styles = self._cfg.require_section("prompts.styles")
         if style_name not in styles:
             raise LLMError(
-                f"Unknown translation style: '{style_name}' (available: {', '.join(styles)})"
+                "llm.unknown_style", status=400, style=style_name, available=listing(styles)
             )
         return self._cfg.get("prompts.system").format(
             source_lang=source_lang,

@@ -67,8 +67,23 @@ function applyStaticText() {
   document.title = t('app.title');
 }
 
+/**
+ * 서버 요청에 표시 언어를 싣는다.
+ *
+ * 서버 오류 문구는 서버가 만들고 서버가 번역한다(config/messages/*.yaml). 웹은
+ * 그 문구를 그대로 보여주면 되지만, 서버가 어느 언어로 만들지 알려면 요청마다
+ * 로케일이 실려야 한다. 여기 한 곳에서 붙이면 호출부마다 챙기지 않아도 된다.
+ * 이미 붙어 있으면 건드리지 않고, 우리 API(/v1/)가 아닌 요청도 건드리지 않는다.
+ */
+function withLocale(url) {
+  if (!state.locale || typeof url !== 'string' || !url.startsWith('/v1/')) return url;
+  const u = new URL(url, location.origin);
+  if (!u.searchParams.has('locale')) u.searchParams.set('locale', state.locale);
+  return u.pathname + u.search;
+}
+
 async function getJSON(url, options) {
-  const res = await fetch(url, options);
+  const res = await fetch(withLocale(url), options);
   let body = null;
   try {
     body = await res.json();
@@ -761,7 +776,9 @@ function streamUrl(path) {
  * state.form 의 키가 이미 API 파라미터 이름이라 그대로 실린다(PTT 의 FormData 와 같은 규칙).
  */
 function hfConfigMessage(sampleRate) {
-  const msg = { type: 'config', sample_rate: sampleRate };
+  // 서버는 이 값으로 error 이벤트의 message 를 렌더한다. 없으면 Accept-Language,
+  // 그것도 없으면 영어다 — 브라우저는 WS 핸드셰이크에 헤더를 못 붙이므로 여기서 준다.
+  const msg = { type: 'config', sample_rate: sampleRate, locale: state.locale };
   for (const [key, value] of Object.entries(state.form)) {
     if (key === 'with_audio') continue;
     if (value === undefined || value === null || value === '') continue;  // 빈 값은 서버 기본값

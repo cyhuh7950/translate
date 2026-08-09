@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from ... import upstream
+from ...engines import EngineError
 from ...registry import register
 
 TTS_KIND = "tts"
@@ -18,8 +20,11 @@ TTS_KIND = "tts"
 
 @register(TTS_KIND, "openai_audio")
 class OpenAIAudioTTS:
-    def __init__(self, http: dict):
+    def __init__(self, http: dict, *, expose_upstream_errors: bool):
         self._http = http
+        # 엔진이 돌려준 오류 본문을 클라이언트에 보여도 되는가.
+        # 기본값은 코드가 아니라 diagnostics.expose_upstream_errors 에 있다.
+        self._expose = bool(expose_upstream_errors)
 
     def _timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -56,7 +61,13 @@ class OpenAIAudioTTS:
         async with httpx.AsyncClient(timeout=self._timeout()) as c:
             r = await c.post(f"{url}/v1/audio/speech", headers=headers, json=payload)
             if r.status_code >= 400:
-                raise RuntimeError(f"TTS error {r.status_code}: {r.text[:300]}")
+                raise upstream.failure(
+                    EngineError,
+                    "engine.tts_failed",
+                    body=r.text[:300],
+                    expose=self._expose,
+                    status_code=r.status_code,
+                )
             audio = r.content
             meta = r.headers
 

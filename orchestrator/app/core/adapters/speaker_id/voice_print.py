@@ -304,10 +304,7 @@ async def voice_print(
 ) -> Decision:
     """등록된 목소리와 대조하고, 그 결과를 정책에 넘겨 판정을 받는다."""
     if ctx is None or ctx.config is None:
-        raise SpeakerIdError(
-            "voice_print needs the pipeline context (engine, store, config). "
-            "It cannot be used outside the translation pipeline"
-        )
+        raise SpeakerIdError("speaker.needs_pipeline_context", status=500)
 
     recognition = Recognition(ctx, participants, hint=hint, audio=audio)
     policy = registry.resolve(SPEAKER_POLICY_KIND, recognition.policy_name)

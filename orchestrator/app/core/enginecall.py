@@ -8,6 +8,10 @@
     url, key = enginecall.target(engines, engine)
     result  = await enginecall.adapter(cfg, engine).transcribe(url=url, api_key=key, ...)
 
+어댑터 생성자의 계약은 `cls(http_settings, *, expose_upstream_errors)` 다. 두 번째 것은
+상류가 돌려준 오류 본문을 클라이언트에 보여도 되는지이고, 기본값은 코드가 아니라
+설정(`diagnostics.expose_upstream_errors`)에 있다 — `app/core/upstream.py` 를 볼 것.
+
 `adapter()` 가 `engine.kind` 를 레지스트리 종류로 그대로 쓰기 때문에, 새 종류의
 엔진(speaker 처럼)을 붙이는 일은 어댑터 파일 하나 추가 + engines.yaml 항목 추가로 끝난다.
 """
@@ -36,7 +40,10 @@ def pick(
 def adapter(cfg: Config, engine: Engine):
     """엔진의 API 방언에 맞는 어댑터 인스턴스. 방언 이름은 engines.yaml 의 adapter 다."""
     cls = registry.resolve(engine.kind, engine.adapter)
-    return cls(cfg.require_section("engine_http"))
+    return cls(
+        cfg.require_section("engine_http"),
+        expose_upstream_errors=bool(cfg.get("diagnostics.expose_upstream_errors")),
+    )
 
 
 def target(engines: EngineRegistry, engine: Engine) -> tuple[str, str]:

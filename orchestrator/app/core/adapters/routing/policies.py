@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from ...engines import Engine, EngineError, EngineRegistry
+from ...errors import listing
 from ...registry import register
 
 ROUTING_KIND = "routing"
@@ -24,14 +25,16 @@ def _check(engine: Engine, mode: str) -> Engine:
     """지정된 엔진이 요청 모드를 지원하는지. 조용히 다른 모드로 격하시키지 않는다."""
     if not engine.supports(mode):
         raise EngineError(
-            f"Engine '{engine.id}' does not support '{mode}' mode "
-            f"(supported: {', '.join(engine.modes)}). "
-            f"Check modes in engines.yaml or pick another engine"
+            "engine.mode_unsupported",
+            status=400,
+            engine_id=engine.id,
+            mode=mode,
+            supported=listing(engine.modes),
         )
     if not engine.available:
-        raise EngineError(f"Cannot reach engine '{engine.id}': {engine.last_error}")
+        raise EngineError("engine.unreachable", engine_id=engine.id, reason=engine.last_error)
     if not engine.ready:
-        raise EngineError(f"Engine '{engine.id}' is not ready yet: {engine.last_error}")
+        raise EngineError("engine.not_ready", engine_id=engine.id, reason=engine.last_error)
     return engine
 
 
@@ -40,19 +43,14 @@ def _candidates(engines: EngineRegistry, kind: str, mode: str) -> list[Engine]:
 
 
 def _no_candidate(kind: str, mode: str) -> EngineError:
-    return EngineError(
-        f"No {kind} engine is currently available that supports '{mode}' mode. "
-        f"Check that the engine is up and that '{mode}' is listed in modes in engines.yaml"
-    )
+    return EngineError("engine.none_available", kind=kind, mode=mode)
 
 
 @register(ROUTING_KIND, "explicit")
 def explicit(engines: EngineRegistry, *, kind: str, mode: str, requested: str | None) -> Engine:
     """세션이 지정한 것만 쓴다. 지정이 없으면 오류."""
     if not requested:
-        raise EngineError(
-            f"routing.policy is 'explicit', so the session must specify the {kind} engine"
-        )
+        raise EngineError("engine.explicit_required", status=400, kind=kind)
     return _check(engines.get(requested), mode)
 
 

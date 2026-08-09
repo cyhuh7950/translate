@@ -35,6 +35,8 @@ from typing import Any
 
 import numpy as np
 
+from ...errors import AppError, listing
+
 # 레지스트리에 등록되는 종류 이름. 새 백엔드는 이 폴더에 파일을 하나 넣으면 끝난다.
 VAD_KIND = "vad"
 
@@ -42,8 +44,11 @@ SPEECH_START = "speech_start"
 SPEECH_END = "speech_end"
 
 
-class VadError(Exception):
-    pass
+class VadError(AppError):
+    """VAD 설정이 잘못됐거나 판정 중 실패했다."""
+
+    default_code = "vad.failed"
+    default_status = 500
 
 
 @dataclass
@@ -87,8 +92,9 @@ def need(settings: dict, key: str, backend: str) -> Any:
     """
     if key not in settings:
         raise VadError(
-            f"VAD backend '{backend}' requires the '{key}' setting. "
-            f"Add it under the vad: section of defaults.yaml "
-            f"(present: {', '.join(sorted(settings)) or 'none'})"
+            "vad.setting_required",
+            backend=backend,
+            setting=key,
+            present=listing(sorted(settings)),
         )
     return settings[key]

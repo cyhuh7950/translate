@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 
 from . import registry
-from .adapters.audio_filter._base import AUDIO_FILTER_KIND, FilterResult
+from .adapters.audio_filter._base import AUDIO_FILTER_KIND, AudioFilterError, FilterResult
 from .audio import pcm16_to_wav
 from .config import Config
 
@@ -158,15 +158,20 @@ async def decode_pcm16(
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
-        raise RuntimeError(f"{binary} did not finish within {timeout}s") from None
+        raise AudioFilterError(
+            "audio.decode_timeout", decoder=binary, timeout=timeout
+        ) from None
 
     if proc.returncode != 0:
         detail = err.decode("utf-8", "replace").strip().splitlines()
-        raise RuntimeError(
-            f"{binary} exited with {proc.returncode}: {detail[-1] if detail else 'no output'}"
+        raise AudioFilterError(
+            "audio.decode_failed",
+            decoder=binary,
+            status_code=proc.returncode,
+            reason=detail[-1] if detail else "-",
         )
     if not out:
-        raise RuntimeError(f"{binary} produced no audio samples")
+        raise AudioFilterError("audio.decode_empty", decoder=binary)
 
     if len(out) % 2:
         out = out[: len(out) - 1]

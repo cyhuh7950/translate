@@ -49,14 +49,14 @@ _INT16_FULL_SCALE = 32768.0
 class EnergyVad:
     def __init__(self, settings: dict, sample_rate: int):
         if sample_rate <= 0:
-            raise VadError(f"sample_rate must be positive (got {sample_rate})")
+            raise VadError("vad.sample_rate_invalid", sample_rate=sample_rate)
         self._sr = int(sample_rate)
 
         g = lambda key: need(settings, key, "energy")  # noqa: E731
 
         self._frame_ms = int(g("frame_ms"))
         if self._frame_ms <= 0:
-            raise VadError("vad.frame_ms must be positive")
+            raise VadError("vad.frame_ms_invalid")
         self._frame = max(1, round(self._sr * self._frame_ms / 1000))
         # 반올림된 프레임 크기로 실제 프레임 길이를 다시 계산한다.
         # 그러지 않으면 at_ms 가 조금씩 어긋난다.

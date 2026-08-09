@@ -34,6 +34,19 @@ def normalize(locale: str | None) -> str:
     return head.replace("_", "-").split("-")[0].lower() or FALLBACK_LOCALE
 
 
+def resolve(*candidates: str | None) -> str:
+    """
+    우선순위대로 훑어 처음 나온 것을 정규화한다. 전부 비어 있으면 기본어.
+
+    표시 언어를 정하는 규칙은 한 곳에만 둔다. HTTP 는 `?locale=` > `Accept-Language`,
+    WS 는 config 메시지의 `locale` > 핸드셰이크의 `Accept-Language` 순으로 넘긴다.
+    """
+    for candidate in candidates:
+        if candidate and candidate.strip():
+            return normalize(candidate)
+    return FALLBACK_LOCALE
+
+
 def localize(value: Any, locale: str | None) -> Any:
     """
     로케일 맵이면 해당 언어를, 아니면 값을 그대로.

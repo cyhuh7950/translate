@@ -29,30 +29,29 @@ from fastapi import (
     FastAPI,
     File,
     Form,
-    HTTPException,
     Query,
     Request,
     UploadFile,
     WebSocket,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .core import moduleapi, registry
+from .core import i18n, messages, moduleapi, registry
 from .core.adapters.audio_filter._base import AUDIO_FILTER_KIND
-from .core.adapters.llm._base import LLMError
 from .core.adapters.routing.policies import ROUTING_KIND
 from .core.adapters.speaker_id._base import SPEAKER_ID_KIND
 from .core.adapters.speaker_policy._base import SPEAKER_POLICY_KIND
 from .core.adapters.turn.policies import TURN_KIND
 from .core.adapters.vad._base import VAD_KIND
 from .core.config import Config, ConfigError
-from .core.engines import EngineError, EngineRegistry
+from .core.engines import EngineRegistry
+from .core.errors import AppError, jsonable
 from .core.i18n import localize
-from .core.i18n import normalize as normalize_locale
 from .core.llm import ProviderRegistry, Translator
 from .core.moduleapi import ModuleContext
-from .core.registry import RegistryError
 from .core.sessions import ProfileRegistry
 from .core.speech import SpeechService
 from .core.voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
@@ -88,12 +87,23 @@ class State:
             self.config, self.engines, self.voiceprints, self.speaker_engine
         )
 
+    def rebuild(self) -> None:
+        """
+        설정이 바뀐 뒤 설정에서 만들어진 것들을 다시 만든다.
+
+        설정을 갈아끼우는 경로가 셋(파일 변경 감지·`/v1/admin/reload`·`/v1/admin/config`)
+        이라 한 곳에 모아 둔다. 갈라 두면 어느 한 경로에서만 반영되지 않는 것이 생긴다 —
+        실제로 프로바이더 캐시가 관리 API 경로에서만 살아남는 문제가 있었다.
+        """
+        self.engines.load()
+        self.profiles.load()
+        # base_url·모델·상류 오류 노출 여부가 바뀌었을 수 있다. 어댑터는 캐시된다.
+        self.providers.invalidate()
+
     def reload_if_changed(self) -> bool:
         if not self.config.maybe_reload():
             return False
-        self.engines.load()
-        self.profiles.load()
-        self.providers.invalidate()   # base_url·모델이 바뀌었을 수 있다
+        self.rebuild()
         return True
 
 
@@ -109,18 +119,40 @@ def _languages_view(cfg: Config, locale: str | None) -> list[dict]:
     for item in cfg.get("languages"):
         code = (item.get("code") or "").strip()
         if not code:
-            raise ConfigError("A languages entry has no code")
+            raise ConfigError("languages.no_code")
         out.append({"code": code, "label": localize(item.get("label"), locale) or code})
     return out
+
+
+def request_locale(request: Request) -> str:
+    """
+    요청의 표시 언어. `?locale=` > `Accept-Language` > 기본어(en).
+
+    `/v1/config` 와 오류 봉투가 같은 규칙을 써야 한다. 규칙이 갈리면 사용자는
+    화면은 한국어인데 오류만 영어인 상태를 보게 된다.
+    """
+    return i18n.resolve(
+        request.query_params.get("locale"), request.headers.get("accept-language")
+    )
+
+
+def error_body(code: str, params: dict, locale: str) -> dict:
+    """
+    오류 응답 봉투. **`detail` 은 문자열로 유지한다.**
+
+    기존 클라이언트(웹·curl)가 `detail` 하나만 보고 동작하기 때문이다. 기계가 읽을
+    코드와 파라미터는 옆에 `error` 로 따로 싣는다 — 문구를 파싱하게 만들지 않는다.
+    """
+    return {
+        "detail": messages.render(code, params, locale),
+        "error": {"code": code, "params": params},
+    }
 
 
 def _config_dir() -> str:
     path = os.environ.get(CONFIG_DIR_ENV, "").strip()
     if not path:
-        raise ConfigError(
-            f"The {CONFIG_DIR_ENV} environment variable is required. "
-            f"Set it to the config directory path (e.g. /config)"
-        )
+        raise ConfigError("config.dir_env_required", env=CONFIG_DIR_ENV)
     return path
 
 
@@ -173,6 +205,71 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ---- 오류 봉투 ---------------------------------------------------------
+    #
+    # 봉투는 여기 한 곳에서만 만들어진다. 라우트는 코드와 파라미터를 든 예외를
+    # 던지기만 하면 되고, 문구는 요청 로케일이 확정되는 이 자리에서 렌더된다.
+
+    @app.exception_handler(AppError)
+    async def _on_app_error(request: Request, exc: AppError) -> JSONResponse:
+        if exc.status >= 500:
+            log.error("[%s] %s", exc.code, exc)
+        return JSONResponse(
+            error_body(exc.code, exc.json_params(), request_locale(request)),
+            status_code=exc.status,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _on_http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """
+        프레임워크가 만든 오류(없는 경로, 허용되지 않은 메서드 …).
+
+        코드는 `http.<상태>` 로 조립된다. 카탈로그에 그 상태의 문구를 넣으면 소스를
+        고치지 않고도 문장이 붙고, 없으면 `http.error` 로 떨어진다.
+        """
+        code = f"http.{exc.status_code}"
+        params = {
+            "status": exc.status_code,
+            "detail": jsonable(exc.detail),
+            "method": request.method,
+            "path": request.url.path,
+        }
+        if not messages.has(code):
+            code = "http.error"
+        return JSONResponse(
+            error_body(code, params, request_locale(request)),
+            status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """
+        본문 검증 실패. 기본 핸들러는 detail 을 배열로 내보내므로 여기서 맞춘다.
+
+        pydantic 의 원본 오류를 그대로 싣지 않는 이유는 두 가지다. 파이썬 repr 이
+        그대로 문장에 들어가 읽히지 않고, `input` 에 요청 본문이 통째로 되돌아온다.
+        어느 필드가 왜 틀렸는지만 남긴다.
+        """
+        fields = [
+            {
+                "loc": ".".join(str(part) for part in (item.get("loc") or ())),
+                "msg": str(item.get("msg") or ""),
+                "type": str(item.get("type") or ""),
+            }
+            for item in exc.errors()
+        ]
+        params = {
+            "status": 422,
+            "fields": fields,
+            "summary": "; ".join(f"{f['loc']}: {f['msg']}" for f in fields),
+        }
+        return JSONResponse(
+            error_body("http.422", params, request_locale(request)), status_code=422
+        )
+
     auth = Depends(_auth_dependency(state))
 
     # 모듈이 받는 공용 서비스 묶음. 모듈은 이것만 알고 server.py 를 알지 못한다.
@@ -222,8 +319,9 @@ def create_app() -> FastAPI:
         """
         state.reload_if_changed()
         c = state.config
-        # 표시 언어 우선순위: ?locale= > Accept-Language > 기본어(en)
-        want_locale = normalize_locale(locale or request.headers.get("accept-language"))
+        # 표시 언어 규칙은 오류 봉투와 같은 것을 쓴다 (request_locale).
+        # `locale` 파라미터를 선언해 두는 것은 OpenAPI 문서에 드러내기 위해서다.
+        want_locale = request_locale(request)
         body = {
             "server_id": c.get("server.id"),
             "locale": want_locale,
@@ -310,10 +408,9 @@ def create_app() -> FastAPI:
     async def list_models(provider: str | None = None) -> dict:
         """Asks the provider directly instead of hardcoding model names in the code or client."""
         pid = provider or state.config.get("llm.default_provider")
-        try:
-            return {"provider": pid, "models": await state.providers.models(pid)}
-        except LLMError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        # LLMError 는 자기 코드와 상태(모르는 프로바이더 400 / 프로바이더 실패 502)를
+        # 들고 있다. 여기서 다시 상태를 정하지 않고 봉투 핸들러로 올린다.
+        return {"provider": pid, "models": await state.providers.models(pid)}
 
     # ---- 음성 등록 (voice print) --------------------------------------------
     #
@@ -348,6 +445,7 @@ def create_app() -> FastAPI:
         dependencies=[auth],
     )
     async def enroll_speaker(
+        request: Request,
         speaker_id: str = Form(
             ..., description="Participant id this voice belongs to (e.g. a, b, speaker)"
         ),
@@ -381,47 +479,42 @@ def create_app() -> FastAPI:
                 f.content_type or "application/octet-stream",
             ))
         if total > limit:
-            raise HTTPException(413, f"Audio is too large ({total} > {limit} bytes)")
+            raise AppError("audio.too_large", status=413, size=total, limit=limit)
 
         minimum = int(c.get("speaker_id.min_enroll_files"))
         if len(payload) < minimum:
-            raise HTTPException(
-                400,
-                f"Enrolling '{speaker_id}' needs at least {minimum} non-empty audio file(s), "
-                f"got {len(payload)} (speaker_id.min_enroll_files)",
-            )
-
-        try:
-            body = await state.speaker_engine.enroll(
-                mode=mode or c.get("session.default_mode"), files=payload
-            )
-        except EngineError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        except RegistryError as exc:
-            raise HTTPException(500, str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(502, str(exc)) from exc
-
-        try:
-            vp = state.voiceprints.put(
+            raise AppError(
+                "speaker.enroll_needs_files",
+                status=400,
                 speaker_id=speaker_id,
-                name=name or speaker_id,
-                embedding=body["embedding"],
-                utterances=int(body.get("count") or len(payload)),
-                dim=int(body.get("dim") or 0),
-                engine=str(body.get("engine") or ""),
-                model=str(body.get("model") or ""),
+                minimum=minimum,
+                count=len(payload),
             )
-        except VoicePrintError as exc:
-            raise HTTPException(500, str(exc)) from exc
+
+        # 엔진·레지스트리·저장소 오류는 전부 코드와 상태를 들고 있으므로 그대로 올린다.
+        body = await state.speaker_engine.enroll(
+            mode=mode or c.get("session.default_mode"), files=payload
+        )
+
+        vp = state.voiceprints.put(
+            speaker_id=speaker_id,
+            name=name or speaker_id,
+            embedding=body["embedding"],
+            utterances=int(body.get("count") or len(payload)),
+            dim=int(body.get("dim") or 0),
+            engine=str(body.get("engine") or ""),
+            model=str(body.get("model") or ""),
+        )
 
         threshold = float(c.get("speaker_id.threshold"))
         spread = body.get("min_pairwise_similarity")
         warning = None
         if spread is not None and float(spread) < threshold:
-            warning = (
-                f"The uploaded utterances are only {float(spread):.2f} alike, which is below "
-                f"the match threshold of {threshold}. They may not all be the same person"
+            # 오류는 아니지만 사용자에게 보이는 문구다. 오류와 같은 카탈로그를 쓴다.
+            warning = messages.render(
+                "speaker.enroll_spread_low",
+                {"similarity": f"{float(spread):.2f}", "threshold": threshold},
+                request_locale(request),
             )
         return {
             "speaker": vp.public(),
@@ -439,19 +532,17 @@ def create_app() -> FastAPI:
     async def delete_speaker(speaker_id: str) -> dict:
         """Removes the stored embedding immediately."""
         state.reload_if_changed()
-        try:
-            removed = state.voiceprints.delete(speaker_id)
-        except VoicePrintError as exc:
-            raise HTTPException(500, str(exc)) from exc
+        removed = state.voiceprints.delete(speaker_id)
         if not removed:
-            raise HTTPException(404, f"No voice print is enrolled for '{speaker_id}'")
+            raise VoicePrintError(
+                "voiceprint.not_enrolled", status=404, speaker_id=speaker_id
+            )
         return {"deleted": speaker_id, "enrolled": state.voiceprints.count()}
 
     @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:
         state.config.reload()
-        state.engines.load()
-        state.profiles.load()
+        state.rebuild()
         await state.engines.probe_all()
         return {"status": "reloaded", "engines": len(state.engines.snapshot())}
 
@@ -459,8 +550,7 @@ def create_app() -> FastAPI:
     async def patch_config(patch: dict) -> dict:
         """Applied at the highest priority. Takes effect without a restart."""
         state.config.set_runtime(patch)
-        state.engines.load()
-        state.profiles.load()
+        state.rebuild()
         return {"status": "applied", "keys": sorted(patch)}
 
     # ---- 기능 모듈 ---------------------------------------------------------
@@ -515,7 +605,7 @@ def _auth_dependency(state: State):
             return
         # HTTP 는 헤더만 본다. 쿼리 파라미터 대안은 WS 전용이다.
         if _token_of(request.headers, None, "") != key:
-            raise HTTPException(401, "Invalid API key")
+            raise AppError("auth.invalid_key", status=401)
 
     return check
 

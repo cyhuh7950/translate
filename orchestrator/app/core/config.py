@@ -11,6 +11,10 @@
     defaults.yaml  →  기타 *.yaml  →  *.local.yaml  →  환경변수  →  관리 API
 
 문자열 안의 `${VAR}` 는 환경변수로 치환된다. 비밀값을 설정 파일에 적지 않기 위한 장치다.
+
+하위 디렉터리는 병합하지 않는다. `config/messages/` 의 오류 문구 카탈로그가 설정값에
+섞이면 안 되기 때문이다. 대신 설정을 읽는 김에 카탈로그도 같이 읽고, 같은 핫 리로드
+경로를 타게 한다 (`app/core/messages.py`).
 """
 
 from __future__ import annotations
@@ -25,6 +29,9 @@ from typing import Any
 
 import yaml
 
+from . import messages
+from .errors import AppError
+
 log = logging.getLogger("config")
 
 # 환경변수로 설정을 덮어쓸 때 쓰는 접두사와 중첩 구분자.
@@ -37,8 +44,11 @@ _VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _MISSING = object()
 
 
-class ConfigError(Exception):
+class ConfigError(AppError):
     """설정이 없거나 잘못됐다. 코드가 임의로 기본값을 지어내지 않고 여기서 멈춘다."""
+
+    default_code = "config.invalid"
+    default_status = 500
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -84,15 +94,26 @@ def _env_overrides() -> dict:
         for p in parts[:-1]:
             cursor = cursor.setdefault(p.lower(), {})
             if not isinstance(cursor, dict):  # a__b 와 a__b__c 가 충돌하는 경우
-                raise ConfigError(f"Conflicting config path from environment variable: {key}")
+                raise ConfigError("config.env_conflict", key=key)
         cursor[parts[-1].lower()] = _coerce(raw)
     return out
 
 
-def _load_dir(path: Path) -> tuple[dict, dict[Path, float]]:
-    """설정 디렉터리의 yaml 을 정해진 순서로 병합한다. (병합결과, 파일별 mtime)"""
+def _watched(path: Path) -> dict[Path, float]:
+    """
+    변경을 감시할 파일들. 최상위 설정과 메시지 카탈로그를 함께 본다.
+
+    카탈로그는 설정값에 병합되지 않지만 리로드 경로는 같아야 한다 — 문구 하나
+    고치자고 재기동하게 만들지 않기 위해서다.
+    """
+    files = list(path.glob("*.yaml")) + list((path / messages.SUBDIR).glob("*.yaml"))
+    return {p: p.stat().st_mtime for p in files if p.is_file()}
+
+
+def _load_dir(path: Path) -> dict:
+    """설정 디렉터리의 **최상위** yaml 을 정해진 순서로 병합한다. 하위 디렉터리는 제외."""
     if not path.is_dir():
-        raise ConfigError(f"Config directory not found: {path}")
+        raise ConfigError("config.dir_missing", path=path)
 
     files = sorted(p for p in path.glob("*.yaml") if p.is_file())
     # defaults 를 맨 앞, *.local.yaml 을 맨 뒤로. 나머지는 이름순.
@@ -104,20 +125,18 @@ def _load_dir(path: Path) -> tuple[dict, dict[Path, float]]:
         return (1, p.name)
 
     merged: dict = {}
-    stamps: dict[Path, float] = {}
     for f in sorted(files, key=order):
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
-            raise ConfigError(f"Failed to parse {f.name}: {exc}") from exc
+            raise ConfigError("config.parse_failed", file=f.name, reason=exc) from exc
         if not isinstance(data, dict):
-            raise ConfigError(f"The top level of {f.name} must be a mapping")
+            raise ConfigError("config.not_mapping", file=f.name)
         merged = _deep_merge(merged, data)
-        stamps[f] = f.stat().st_mtime
 
     if not merged:
-        raise ConfigError(f"No readable content in config directory: {path}")
-    return merged, stamps
+        raise ConfigError("config.dir_empty", path=path)
+    return merged
 
 
 class Config:
@@ -135,17 +154,20 @@ class Config:
 
     def reload(self) -> None:
         with self._lock:
-            files, stamps = _load_dir(self._dir)
+            # 문구 카탈로그를 먼저 읽는다. 설정을 읽다 실패한 오류도 문장으로 나와야
+            # 하는데, 그 문장이 카탈로그에 있기 때문이다.
+            messages.load(self._dir)
+            files = _load_dir(self._dir)
             data = _deep_merge(files, _env_overrides())
             data = _deep_merge(data, self._runtime)
             self._data = _expand_vars(data)
-            self._stamps = stamps
-            log.info("Config loaded (%d files, %s)", len(stamps), self._dir)
+            self._stamps = _watched(self._dir)
+            log.info("Config loaded (%d files, %s)", len(self._stamps), self._dir)
 
     def maybe_reload(self) -> bool:
         """파일이 추가·수정·삭제됐으면 다시 읽는다. 재기동 없이 설정이 반영되도록."""
         with self._lock:
-            current = {p: p.stat().st_mtime for p in self._dir.glob("*.yaml") if p.is_file()}
+            current = _watched(self._dir)
             if current == self._stamps:
                 return False
         log.info("Config file change detected — reloading")
@@ -178,9 +200,10 @@ class Config:
         value = self._lookup(path)
         if value is _MISSING:
             raise ConfigError(
-                f"Missing config value: '{path}'. "
-                f"Add it to {self._dir}/defaults.yaml or "
-                f"inject it via {ENV_PREFIX}{path.replace('.', ENV_NESTING)}"
+                "config.missing_value",
+                path=path,
+                dir=self._dir,
+                env=f"{ENV_PREFIX}{path.replace('.', ENV_NESTING)}",
             )
         return copy.deepcopy(value) if isinstance(value, (dict, list)) else value
 
@@ -194,7 +217,7 @@ class Config:
     def require_section(self, path: str) -> dict:
         value = self.get(path)
         if not isinstance(value, dict):
-            raise ConfigError(f"'{path}' must be a mapping (got: {type(value).__name__})")
+            raise ConfigError("config.not_a_section", path=path, type=type(value).__name__)
         return value
 
     def as_dict(self) -> dict:

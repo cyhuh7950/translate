@@ -22,6 +22,7 @@ import httpx
 
 from . import registry
 from .config import Config, ConfigError
+from .errors import AppError, listing
 
 log = logging.getLogger("engines")
 
@@ -29,8 +30,11 @@ log = logging.getLogger("engines")
 CONDITION_KIND = "endpoint_condition"
 
 
-class EngineError(Exception):
-    pass
+class EngineError(AppError):
+    """엔진을 고르지 못했거나 엔진이 응답하지 않았다."""
+
+    default_code = "engine.failed"
+    default_status = 502
 
 
 @dataclass
@@ -77,10 +81,7 @@ class Engine:
         ctx = {**context, "engine_server": self.server, "engine_id": self.id}
         candidates = [e for e in self.endpoints if e.matches(ctx)]
         if not candidates:
-            raise EngineError(
-                f"Engine '{self.id}' has no endpoint matching the current conditions "
-                f"(context={ctx})"
-            )
+            raise EngineError("engine.no_endpoint_match", engine_id=self.id, context=ctx)
         return sorted(candidates, key=lambda e: e.priority)[0]
 
     def supports(self, mode: str) -> bool:
@@ -109,7 +110,7 @@ class Engine:
 def _parse_endpoint(raw: dict, engine_id: str) -> Endpoint:
     url = (raw.get("url") or "").strip()
     if not url:
-        raise ConfigError(f"An endpoint of engine '{engine_id}' has no url")
+        raise ConfigError("engine.endpoint_no_url", engine_id=engine_id)
     return Endpoint(
         url=url.rstrip("/"),
         priority=int(raw.get("priority", 100)),
@@ -121,25 +122,19 @@ def _parse_endpoint(raw: dict, engine_id: str) -> Endpoint:
 def _parse_engine(raw: dict) -> Engine:
     eid = (raw.get("id") or "").strip()
     if not eid:
-        raise ConfigError("An engine entry has no id")
+        raise ConfigError("engine.no_id")
     kind = (raw.get("kind") or "").strip()
     if not kind:
-        raise ConfigError(f"Engine '{eid}' has no kind")
+        raise ConfigError("engine.no_kind", engine_id=eid)
     endpoints = raw.get("endpoints") or []
     if not endpoints:
-        raise ConfigError(f"Engine '{eid}' has no endpoints")
+        raise ConfigError("engine.no_endpoints", engine_id=eid)
     modes = raw.get("modes")
     if not modes:
-        raise ConfigError(
-            f"Engine '{eid}' has no modes. "
-            f"The operator must set them based on measured performance "
-            f"(the system does not infer them)"
-        )
+        raise ConfigError("engine.no_modes", engine_id=eid)
     adapter = (raw.get("adapter") or "").strip()
     if not adapter:
-        raise ConfigError(
-            f"Engine '{eid}' has no adapter. You must specify that engine's API dialect"
-        )
+        raise ConfigError("engine.no_adapter", engine_id=eid)
     return Engine(
         id=eid,
         kind=kind,
@@ -162,12 +157,12 @@ class EngineRegistry:
     def load(self) -> None:
         raw = self._cfg.get("engines")
         if not isinstance(raw, list):
-            raise ConfigError("engines must be a list")
+            raise ConfigError("engine.not_a_list")
         engines = {}
         for item in raw:
             e = _parse_engine(item)
             if e.id in engines:
-                raise ConfigError(f"Duplicate engine id: {e.id}")
+                raise ConfigError("engine.duplicate_id", engine_id=e.id)
             engines[e.id] = e
         # 이전 관측 상태는 유지한다 — 설정만 바뀌었을 뿐 엔진이 죽은 것은 아니다
         for eid, old in self._engines.items():
@@ -185,8 +180,7 @@ class EngineRegistry:
             return self._engines[engine_id]
         except KeyError:
             raise EngineError(
-                f"Unknown engine: '{engine_id}'. "
-                f"Available: {', '.join(self._engines) or '(none)'}"
+                "engine.unknown", engine_id=engine_id, available=listing(self._engines)
             ) from None
 
     def list(

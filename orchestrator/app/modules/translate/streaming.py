@@ -49,7 +49,7 @@ import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from ...core import diagnostics, preprocess, registry
+from ...core import diagnostics, i18n, preprocess, registry
 from ...core.adapters.llm._base import LLMError
 from ...core.adapters.speaker_id._base import SpeakerIdError, static_speaker
 from ...core.adapters.turn.policies import STOP_OUTPUT, TURN_KIND, TurnState
@@ -57,6 +57,7 @@ from ...core.adapters.vad._base import SPEECH_END, SPEECH_START, VAD_KIND, VadEr
 from ...core.audio import duration_s, pcm16_from_bytes, pcm16_to_wav
 from ...core.config import ConfigError
 from ...core.engines import EngineError
+from ...core.errors import AppError
 from ...core.llm import Turn
 from ...core.registry import RegistryError
 from ...core.sessions import SessionError
@@ -65,12 +66,16 @@ from ...core.voiceprints import SessionVoices
 log = logging.getLogger("stream")
 
 
-class StreamError(Exception):
-    """클라이언트에 code 와 함께 돌려줄 오류. 메시지는 영어(기본어)로 쓴다."""
+class StreamError(AppError):
+    """
+    클라이언트에 code 와 함께 돌려줄 오류.
 
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
+    문구는 여기 없다 — 코드와 파라미터만 갖고, 문장은 세션 로케일이 정해지는
+    `StreamHandler._error()` 에서 카탈로그로 만들어진다.
+    """
+
+    default_code = "stream.failed"
+    default_status = 400
 
 
 @dataclass
@@ -99,6 +104,10 @@ class StreamHandler:
         self._ctx = ctx                      # core.moduleapi.ModuleContext
         self._pipeline = pipeline            # modules.translate.pipeline.Pipeline
         self._cfg = ctx.config
+
+        # 표시 언어. config 메시지의 locale 이 오면 그것이 이긴다. 그 전에 나가는
+        # 오류(설정 타임아웃 등)도 문구가 있어야 하므로 핸드셰이크 헤더로 먼저 정한다.
+        self._locale = i18n.resolve(ws.headers.get("accept-language"))
 
         self._session = None                 # sessions.Session
         self._vad = None
@@ -138,9 +147,22 @@ class StreamHandler:
             if audio is not None:
                 await self._ws.send_bytes(audio)
 
-    async def _error(self, code: str, message: str) -> None:
-        log.info("stream error [%s] %s", code, message)
-        await self._send({"type": "error", "code": code, "message": message, **self._route()})
+    async def _error(self, error: AppError) -> None:
+        """
+        error 이벤트. `message` 는 **세션 로케일로 렌더한 문장**이다.
+
+        `code` 와 `params` 를 함께 싣는 이유는 클라이언트가 문구를 파싱하지 않고도
+        사유를 구분할 수 있게 하기 위해서다. 문구 카탈로그를 클라이언트에 복제할
+        필요는 없다 — 서버가 이미 올바른 언어로 렌더해서 보낸다.
+        """
+        log.info("stream error [%s] %s", error.code, error)
+        await self._send({
+            "type": "error",
+            "code": error.code,
+            "message": error.message(self._locale),
+            "params": error.json_params(),
+            **self._route(),
+        })
 
     def _route(self) -> dict:
         """
@@ -168,8 +190,8 @@ class StreamHandler:
         await self._ws.accept()
         try:
             await self._configure()
-        except StreamError as exc:
-            await self._error(exc.code, str(exc))
+        except AppError as exc:
+            await self._error(exc)
             await self._ws.close()
             return
 
@@ -198,29 +220,24 @@ class StreamHandler:
         try:
             first = await asyncio.wait_for(self._ws.receive(), timeout=timeout)
         except asyncio.TimeoutError:
-            raise StreamError(
-                "stream.config_timeout",
-                f"No config message within {timeout}s. Send "
-                f'{{"type":"config", ...}} first',
-            ) from None
+            raise StreamError("stream.config_timeout", timeout=timeout) from None
 
         if first.get("type") == "websocket.disconnect":
             raise WebSocketDisconnect(first.get("code", 1000))
         if "text" not in first or first["text"] is None:
-            raise StreamError(
-                "stream.config_required",
-                'The first message must be a JSON {"type":"config", ...}, not binary audio',
-            )
+            raise StreamError("stream.config_required")
 
         try:
             msg = json.loads(first["text"])
         except ValueError as exc:
-            raise StreamError("stream.bad_json", f"Could not parse the config message: {exc}")
+            raise StreamError("stream.bad_json", reason=exc)
         if not isinstance(msg, dict) or msg.get("type") != "config":
-            raise StreamError(
-                "stream.config_required",
-                'The first message must have "type":"config"',
-            )
+            raise StreamError("stream.config_type")
+
+        # 표시 언어. 클라이언트가 config 에 실어 보내면 그것이 헤더보다 우선한다.
+        self._locale = i18n.resolve(
+            msg.get("locale"), self._ws.headers.get("accept-language")
+        )
 
         self._sample_rate = int(self._cfg.get("audio.stt_sample_rate"))
         self._channels = int(self._cfg.get("audio.stt_channels"))
@@ -229,17 +246,13 @@ class StreamHandler:
             # 리샘플링을 조용히 해주지 않는다. 클라이언트가 /v1/config 를 보고
             # 맞춰 보내야 어디서 어긋났는지가 드러난다.
             raise StreamError(
-                "stream.sample_rate",
-                f"This server expects PCM16 mono at {self._sample_rate} Hz "
-                f"(audio.stt_sample_rate), but the client declared {declared}",
+                "stream.sample_rate", expected=self._sample_rate, declared=declared
             )
 
         source_lang = (msg.get("source_lang") or "").strip()
         target_lang = (msg.get("target_lang") or "").strip()
         if not source_lang or not target_lang:
-            raise StreamError(
-                "stream.language_required", "config must include source_lang and target_lang"
-            )
+            raise StreamError("stream.language_required")
 
         try:
             self._session = self._ctx.profiles.create(
@@ -250,7 +263,8 @@ class StreamHandler:
                 participants=msg.get("participants"),
             )
         except (SessionError, ConfigError) as exc:
-            raise StreamError("session.invalid", str(exc)) from exc
+            # 이미 코드와 파라미터를 든 오류다. 감싸면 그 코드가 사라지므로 그대로 올린다.
+            raise exc
 
         try:
             vad_settings = self._cfg.require_section("vad")
@@ -261,7 +275,7 @@ class StreamHandler:
             )
             self._voices = SessionVoices(self._cfg.get("speaker_id.auto_enroll.utterances"))
         except (RegistryError, VadError, ConfigError) as exc:
-            raise StreamError("stream.setup_failed", str(exc)) from exc
+            raise StreamError("stream.setup_failed", reason=exc) from exc
 
         # 파이프라인에 그대로 넘길 값들. 없는 것은 넣지 않아야 서버 기본값이 쓰인다.
         self._options = {
@@ -323,21 +337,18 @@ class StreamHandler:
         try:
             msg = json.loads(raw)
         except ValueError as exc:
-            await self._error("stream.bad_json", f"Could not parse the message: {exc}")
+            await self._error(StreamError("stream.bad_json", reason=exc))
             return
         if not isinstance(msg, dict):
-            await self._error("stream.bad_message", "A message must be a JSON object")
+            await self._error(StreamError("stream.bad_message"))
             return
 
         kind = msg.get("type")
         if kind == "config":
-            await self._error(
-                "stream.already_configured",
-                "This session is already configured. Open a new connection to change it",
-            )
+            await self._error(StreamError("stream.already_configured"))
             return
         if kind != "control":
-            await self._error("stream.unknown_message", f"Unknown message type: '{kind}'")
+            await self._error(StreamError("stream.unknown_message", type=kind))
             return
 
         action = msg.get("action")
@@ -351,7 +362,7 @@ class StreamHandler:
             self._turn_state.delivering = playing
             self._deliver_until = 0.0
         else:
-            await self._error("stream.unknown_action", f"Unknown control action: '{action}'")
+            await self._error(StreamError("stream.unknown_action", action=action))
 
     async def _on_audio(self, data: bytes) -> None:
         if self._vad is None:
@@ -366,7 +377,7 @@ class StreamHandler:
         try:
             events = self._vad.push(pcm16_from_bytes(data))
         except Exception as exc:
-            await self._error("vad.failed", f"{type(exc).__name__}: {exc}")
+            await self._error(VadError("vad.failed", error=type(exc).__name__, reason=exc))
             return
         await self._emit_vad(events)
 
@@ -440,7 +451,9 @@ class StreamHandler:
                 # cancel 액션으로 이 세그먼트만 죽인 경우. 다음 것을 계속 받는다.
             except Exception as exc:
                 log.exception("Segment processing failed")
-                await self._error("pipeline.failed", f"{type(exc).__name__}: {exc}")
+                await self._error(
+                    StreamError("pipeline.failed", error=type(exc).__name__, reason=exc)
+                )
             finally:
                 self._current = None
                 self._queue.task_done()
@@ -462,7 +475,7 @@ class StreamHandler:
             await self._on_stage(stage, payload)
 
         result = None
-        failure: tuple[str, str] | None = None
+        failure: AppError | None = None
         try:
             result = await self._pipeline.run_audio(
                 self._session,
@@ -475,12 +488,9 @@ class StreamHandler:
                 voices=self._voices,
                 **self._options,
             )
-        except (SessionError, SpeakerIdError) as exc:
-            failure = ("session.invalid", str(exc))
-        except (EngineError, LLMError) as exc:
-            failure = ("engine.failed", str(exc))
-        except RegistryError as exc:
-            failure = ("registry.failed", str(exc))
+        except (SessionError, SpeakerIdError, EngineError, LLMError, RegistryError) as exc:
+            # 각 오류가 자기 코드와 파라미터를 들고 있다. 여기서 뭉뚱그리지 않는다.
+            failure = exc
         finally:
             # 진단 덤프. 꺼져 있으면 아무 일도 하지 않는다.
             # 오류로 끝난 세그먼트야말로 들어봐야 하므로 finally 에 둔다.
@@ -492,7 +502,7 @@ class StreamHandler:
 
         # 오류 통지는 덤프 뒤로 미룬다. 클라이언트에 보내는 내용과 시점은 그대로다.
         if failure is not None:
-            await self._error(*failure)
+            await self._error(failure)
             return
 
         # 대화 맥락 축적. 한국어는 주어 생략이 많아 맥락 없이는 대명사를 틀린다.
@@ -528,7 +538,7 @@ class StreamHandler:
         wav: bytes,
         seg_seconds: float,
         result: Any,
-        failure: tuple[str, str] | None,
+        failure: AppError | None,
         *,
         elapsed_ms: int,
         gate_metrics: dict,
@@ -584,7 +594,12 @@ class StreamHandler:
                 "error": None,
             }
             if failure is not None:
-                record["error"] = {"code": failure[0], "message": failure[1]}
+                # 진단 사이드카는 운영자용이라 기본어로 남긴다.
+                record["error"] = {
+                    "code": failure.code,
+                    "params": failure.json_params(),
+                    "message": str(failure),
+                }
             if result is not None:
                 record["stt"] = {"text": result.source_text, "lang": result.source_lang}
                 record["engines"] = dict(result.engines)

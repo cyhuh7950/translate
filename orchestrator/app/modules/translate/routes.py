@@ -19,19 +19,15 @@ import base64
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, WebSocket
+from fastapi import APIRouter, File, Form, Response, UploadFile, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...core import preprocess
-from ...core.adapters.llm._base import LLMError
-from ...core.adapters.speaker_id._base import SpeakerIdError
 from ...core.config import Config
-from ...core.engines import EngineError
+from ...core.errors import AppError
 from ...core.llm import Turn
 from ...core.moduleapi import ModuleContext
-from ...core.registry import RegistryError
-from ...core.sessions import SessionError
 from .pipeline import Pipeline
 from .streaming import StreamHandler
 
@@ -146,19 +142,18 @@ def build(ctx: ModuleContext, pipeline: Pipeline) -> APIRouter:
         ctx.reload_if_changed()
         c = ctx.config
 
-        try:
-            session = ctx.profiles.create(
-                profile=profile, mode=mode, source_lang=source_lang, target_lang=target_lang
-            )
-        except SessionError as exc:
-            raise HTTPException(400, str(exc)) from exc
+        # 세션·엔진·LLM·레지스트리 오류는 전부 코드와 HTTP 상태를 들고 있다.
+        # 여기서 다시 상태를 정하지 않고 server.py 의 봉투 핸들러로 올린다.
+        session = ctx.profiles.create(
+            profile=profile, mode=mode, source_lang=source_lang, target_lang=target_lang
+        )
 
         audio = await file.read()
         if not audio:
-            raise HTTPException(400, "Empty audio")
+            raise AppError("audio.empty", status=400)
         limit = int(c.get("server.max_upload_bytes"))
         if len(audio) > limit:
-            raise HTTPException(413, f"Audio is too large ({len(audio)} > {limit} bytes)")
+            raise AppError("audio.too_large", status=413, size=len(audio), limit=limit)
 
         # 배경 음성 게이트. 옆에서 TV 가 나오는 환경에서 사용자가 말을 쉬는 구간이
         # STT 로 넘어가 그대로 받아적히는 것을 막는다. 핸즈프리(WS)도 같은 구현을 쓴다.
@@ -170,29 +165,22 @@ def build(ctx: ModuleContext, pipeline: Pipeline) -> APIRouter:
             file.content_type or "application/octet-stream",
         )
 
-        try:
-            result = await pipeline.run_audio(
-                session,
-                audio=audio,
-                filename=filename,
-                content_type=content_type,
-                speaker_hint=speaker,
-                stt_engine=stt_engine,
-                tts_engine=tts_engine,
-                voice=voice,
-                speed=float(speed if speed is not None else c.get("audio.tts_speed")),
-                response_format=response_format or c.get("audio.tts_response_format"),
-                provider=provider,
-                model=model,
-                style=style,
-                with_audio=with_audio,
-            )
-        except (SessionError, SpeakerIdError) as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except (EngineError, LLMError) as exc:
-            raise HTTPException(502, str(exc)) from exc
-        except RegistryError as exc:
-            raise HTTPException(500, str(exc)) from exc
+        result = await pipeline.run_audio(
+            session,
+            audio=audio,
+            filename=filename,
+            content_type=content_type,
+            speaker_hint=speaker,
+            stt_engine=stt_engine,
+            tts_engine=tts_engine,
+            voice=voice,
+            speed=float(speed if speed is not None else c.get("audio.tts_speed")),
+            response_format=response_format or c.get("audio.tts_response_format"),
+            provider=provider,
+            model=model,
+            style=style,
+            with_audio=with_audio,
+        )
 
         # 게이트가 얼마나 잘라냈는지는 응답의 metrics 로 나간다. 튜닝의 근거다.
         result.metrics.update(gate_metrics)
@@ -223,53 +211,40 @@ def build(ctx: ModuleContext, pipeline: Pipeline) -> APIRouter:
             # 번역이 끝난 뒤에 합성하면 클라이언트는 이미 본문을 다 받은 뒤다. 조용히
             # 한쪽을 무시하는 대신 요청을 거절한다 — 소리를 내며 흘려보내는 경로는 WS 다.
             if req.stream:
-                raise HTTPException(
-                    400,
-                    "stream and with_audio cannot be combined: a streamed response is a "
-                    f"plain token stream with nowhere to put the audio. Use the WebSocket "
-                    f"endpoint ({c.get('stream.path')}) for streamed speech, or drop one "
-                    f"of the two",
+                raise AppError(
+                    "request.stream_with_audio", status=400, path=c.get("stream.path")
                 )
-            try:
-                session = ctx.profiles.create(
-                    profile=req.profile,
-                    mode=req.mode,
-                    source_lang=req.source_lang,
-                    target_lang=req.target_lang,
-                )
-            except SessionError as exc:
-                raise HTTPException(400, str(exc)) from exc
+            session = ctx.profiles.create(
+                profile=req.profile,
+                mode=req.mode,
+                source_lang=req.source_lang,
+                target_lang=req.target_lang,
+            )
 
             # 합성까지 하는 경로에만 길이 상한을 건다. 오디오 업로드에 상한이 있는 것과
             # 같은 이유(TTS 엔진을 붙잡는 시간)이고, 기존 텍스트 전용 경로의 동작은
             # 건드리지 않기 위해서다.
             limit = int(c.get("limits.max_input_chars"))
             if len(req.text) > limit:
-                raise HTTPException(413, f"Text is too long ({len(req.text)} > {limit} chars)")
-
-            try:
-                result = await pipeline.run_text(
-                    session,
-                    text=req.text,
-                    speaker_hint=req.speaker,
-                    tts_engine=req.tts_engine,
-                    voice=req.voice,
-                    speed=float(req.speed if req.speed is not None else c.get("audio.tts_speed")),
-                    response_format=req.response_format or c.get("audio.tts_response_format"),
-                    provider=req.provider,
-                    model=req.model,
-                    style=req.style,
-                    context=context,
-                    glossary=req.glossary,
-                    with_audio=True,
+                raise AppError(
+                    "text.too_long", status=413, length=len(req.text), limit=limit
                 )
-            except (SessionError, SpeakerIdError) as exc:
-                raise HTTPException(400, str(exc)) from exc
-            except (EngineError, LLMError) as exc:
-                raise HTTPException(502, str(exc)) from exc
-            except RegistryError as exc:
-                raise HTTPException(500, str(exc)) from exc
 
+            result = await pipeline.run_text(
+                session,
+                text=req.text,
+                speaker_hint=req.speaker,
+                tts_engine=req.tts_engine,
+                voice=req.voice,
+                speed=float(req.speed if req.speed is not None else c.get("audio.tts_speed")),
+                response_format=req.response_format or c.get("audio.tts_response_format"),
+                provider=req.provider,
+                model=req.model,
+                style=req.style,
+                context=context,
+                glossary=req.glossary,
+                with_audio=True,
+            )
             return _segment_response(c, result, req.response_mode)
 
         kwargs = dict(
@@ -281,26 +256,23 @@ def build(ctx: ModuleContext, pipeline: Pipeline) -> APIRouter:
             context=context,
             glossary=req.glossary,
         )
-        try:
-            if req.stream:
-                async def gen():
-                    async for piece in ctx.translator.stream(req.text, **kwargs):
-                        yield piece
-                return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+        if req.stream:
+            async def gen():
+                async for piece in ctx.translator.stream(req.text, **kwargs):
+                    yield piece
+            return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
 
-            started = asyncio.get_running_loop().time()
-            text = await ctx.translator.translate(req.text, **kwargs)
-            elapsed = asyncio.get_running_loop().time() - started
-            return {
-                "text": text,
-                "source_lang": req.source_lang,
-                "target_lang": req.target_lang,
-                "provider": req.provider or ctx.config.get("llm.default_provider"),
-                "model": req.model,
-                "elapsed_s": round(elapsed, 3),
-            }
-        except LLMError as exc:
-            raise HTTPException(502, str(exc)) from exc
+        started = asyncio.get_running_loop().time()
+        text = await ctx.translator.translate(req.text, **kwargs)
+        elapsed = asyncio.get_running_loop().time() - started
+        return {
+            "text": text,
+            "source_lang": req.source_lang,
+            "target_lang": req.target_lang,
+            "provider": req.provider or ctx.config.get("llm.default_provider"),
+            "model": req.model,
+            "elapsed_s": round(elapsed, 3),
+        }
 
     # ---- 실시간 스트림 ------------------------------------------------------
     #

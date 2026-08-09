@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from ...core.engines import Engine
+from ...core.errors import AppError
 from ...core.llm import Translator, Turn
 from ...core.sessions import Session
 from ...core.speech import STT_KIND, TTS_KIND, SpeechService
@@ -57,8 +58,11 @@ log = logging.getLogger("pipeline")
 Progress = Callable[[str, dict], Awaitable[None]]
 
 
-class PipelineError(Exception):
-    pass
+class PipelineError(AppError):
+    """흐름 자체가 실패했다. 단계별 오류는 그 단계의 예외를 그대로 올린다."""
+
+    default_code = "pipeline.failed"
+    default_status = 500
 
 
 @dataclass

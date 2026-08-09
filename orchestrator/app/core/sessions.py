@@ -18,6 +18,7 @@ from typing import Any
 from . import registry
 from .adapters.speaker_id._base import SPEAKER_ID_KIND
 from .config import Config, ConfigError
+from .errors import AppError, listing
 from .i18n import localize
 
 # 프로필 자리표시자는 {{name}} 이다. core/config.py 의 환경변수 치환(${VAR})과 겹치지 않게
@@ -25,8 +26,11 @@ from .i18n import localize
 _VAR = re.compile(r"\{\{([a-z_]+)\}\}")
 
 
-class SessionError(Exception):
-    pass
+class SessionError(AppError):
+    """세션·프로필·참여자가 요청과 맞지 않는다. 요청 쪽 잘못이다."""
+
+    default_code = "session.invalid"
+    default_status = 400
 
 
 @dataclass
@@ -52,7 +56,7 @@ class Session:
         for p in self.participants:
             if p.id == pid:
                 return p
-        raise SessionError(f"Unknown participant: '{pid}'")
+        raise SessionError("session.unknown_participant", participant=pid)
 
     def speakers(self) -> list[Participant]:
         return [p for p in self.participants if p.input]
@@ -61,9 +65,7 @@ class Session:
         """발화자의 output 목록. 여기서 번역 방향이 결정된다."""
         speaker = self.by_id(speaker_id)
         if not speaker.output:
-            raise SessionError(
-                f"Participant '{speaker_id}' has an empty output, so there is nowhere to deliver to"
-            )
+            raise SessionError("session.no_listeners", speaker=speaker_id)
         return [self.by_id(pid) for pid in speaker.output]
 
     def as_dict(self) -> dict:
@@ -120,8 +122,7 @@ def _substitute(value: Any, vars_: dict[str, str]) -> Any:
             key = m.group(1)
             if key not in vars_:
                 raise SessionError(
-                    f"Profile requires a value that was not provided: '{key}'. "
-                    f"Available: {', '.join(sorted(vars_)) or '(none)'}"
+                    "session.missing_variable", key=key, available=listing(sorted(vars_))
                 )
             return vars_[key]
         return _VAR.sub(repl, value)
@@ -144,29 +145,36 @@ class ProfileRegistry:
         raw = self._cfg.require_section("profiles")
         for name, spec in raw.items():
             if not spec.get("participants"):
-                raise ConfigError(f"Profile '{name}' has no participants")
+                raise ConfigError("profile.no_participants", profile=name)
             if not spec.get("speaker_id"):
-                raise ConfigError(f"Profile '{name}' has no speaker_id")
+                raise ConfigError("profile.no_speaker_id", profile=name)
         self._profiles = dict(raw)
 
     def names(self) -> list[str]:
         return list(self._profiles)
 
-    def unavailable_reason(self, name: str) -> str | None:
+    def unavailable_reason(self, name: str) -> SessionError | None:
         """
-        이 프로필을 지금 쓸 수 있는지. 못 쓰면 이유를 돌려준다.
+        이 프로필을 지금 쓸 수 있는지. 못 쓰면 **이유를 예외 객체로** 돌려준다.
+
+        문자열이 아니라 예외인 이유는 두 쓰임이 하나로 모이기 때문이다. `create()` 는
+        그대로 던지면 되고, `/v1/config` 는 표시 언어로 렌더해서 실으면 된다.
+        문구를 여기서 만들면 이 함수가 요청 로케일을 알아야 한다.
 
         1단계에서 `twoway` 는 language_detect 어댑터가 없어 여기서 걸린다.
         2단계에서 그 파일을 추가하면 코드 수정 없이 켜진다.
         """
         spec = self._profiles.get(name)
         if spec is None:
-            return f"Unknown profile: {name}"
+            return SessionError("profile.unknown", status=400, profile=name)
         sid = spec["speaker_id"]
         if not registry.has(SPEAKER_ID_KIND, sid):
-            return (
-                f"Speaker identification implementation '{sid}' is not registered "
-                f"(available: {', '.join(registry.available(SPEAKER_ID_KIND)) or 'none'})"
+            return SessionError(
+                "profile.speaker_id_unregistered",
+                status=400,
+                profile=name,
+                implementation=sid,
+                available=listing(registry.available(SPEAKER_ID_KIND)),
             )
         return None
 
@@ -187,7 +195,8 @@ class ProfileRegistry:
                 "participant_count": len(spec["participants"]),
                 "bidirectional": sum(1 for p in spec["participants"] if p.get("input")) > 1,
                 "available": reason is None,
-                "reason": reason,
+                # 표시 언어로 렌더한 문장. 클라이언트는 이것을 그대로 보여주면 된다.
+                "reason": None if reason is None else reason.message(locale),
             })
         return out
 
@@ -215,7 +224,7 @@ class ProfileRegistry:
             profile_name = profile or self._cfg.get("session.default_profile")
             reason = self.unavailable_reason(profile_name)
             if reason:
-                raise SessionError(f"Profile '{profile_name}' is not usable — {reason}")
+                raise reason
             spec = self._profiles[profile_name]
 
         resolved = _substitute(
@@ -231,7 +240,7 @@ class ProfileRegistry:
             for p in resolved
         ]
         if not any(p.input for p in parts):
-            raise SessionError("No participant accepts input")
+            raise SessionError("session.no_input_participant")
 
         return Session(
             profile=profile_name,
