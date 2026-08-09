@@ -206,6 +206,16 @@ def build(ctx: ModuleContext, pipeline: Pipeline) -> APIRouter:
         c = ctx.config
         context = [Turn(source=t.source, target=t.target) for t in (req.context or [])]
 
+        # profile 은 세션 모델을 타는 경로(with_audio)에서만 쓰이는데 스키마에는 늘 실려
+        # 온다. 평문 경로에서 조용히 버리면 클라이언트는 없는 프로필이나 아직 못 쓰는
+        # 프로필을 달라고 하고도 성공 응답을 받는다 — 적용됐는지 알 길이 없다.
+        # 계약은 그대로 둔 채(평문 경로는 세션을 만들지 않는다) 유효성만 먼저 본다.
+        # 거짓 성공보다 명시적 거부가 낫다.
+        if req.profile:
+            reason = ctx.profiles.unavailable_reason(req.profile)
+            if reason:
+                raise reason
+
         if req.with_audio:
             # 스트리밍 응답은 토큰을 그대로 흘려보내는 본문이라 오디오를 실을 자리가 없다.
             # 번역이 끝난 뒤에 합성하면 클라이언트는 이미 본문을 다 받은 뒤다. 조용히

@@ -96,7 +96,10 @@ cmd_start() {
 }
 
 cmd_stop()    { require_components "$@"; local c; for c in "$@"; do echo "${c_bld}[$c] 정지${c_off}"; dc "$c" down; done; }
-cmd_restart() { require_components "$@"; local c; for c in "$@"; do echo "${c_bld}[$c] 재시작${c_off}"; dc "$c" restart; done; }
+# `docker compose restart` 는 컨테이너를 그 자리에서 다시 돌릴 뿐 새 이미지를 쓰지
+# 않는다. build 뒤에 restart 하면 옛 코드가 조용히 계속 돈다 — 아무 오류도 나지 않아
+# 알아채기 어렵다. 여기서 재시작은 "지금 이미지로 다시 만든다"를 뜻하게 한다.
+cmd_restart() { require_components "$@"; local c; for c in "$@"; do echo "${c_bld}[$c] 재시작${c_off}"; dc "$c" up -d --force-recreate; done; }
 
 cmd_status() {
   local targets=("$@")
