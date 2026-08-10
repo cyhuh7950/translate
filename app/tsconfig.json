@@ -1,32 +1,19 @@
 {
-  // src/api 전용 설정. `types: []` 와 `lib: ES2020` 이 이 계층의 규칙을 **기계로** 강제한다.
+  // React Native 앱 코드용 설정. IDE 와 RN 도구(Metro·eslint·jest)가 이름만 보고 집는
+  // 파일이므로 이 이름을 RN 에 준다.
   //
-  //   - DOM 을 넣지 않으므로 `fetch` / `WebSocket` / `window` 전역이 존재하지 않는다
-  //   - @types/node 를 넣지 않으므로 `Buffer` / `process` / `require` 도 없다
+  // `src/api` 도 여기에 들어온다 — 앱이 실제로 import 하는 코드이니 함께 봐야 한다.
+  // 다만 이 설정에는 RN·jest 타입이 다 들어 있어서 **이식성은 여기서 지켜지지 않는다.**
+  // 그 일은 tsconfig.api.json 이 한다 (`types: []`). `npm run typecheck` 가 셋을 다 돌린다.
   //
-  // 그래서 src/api 가 실수로 브라우저나 Node 에 기대면 여기서 컴파일이 깨진다.
-  // 테스트(Node 전용 API 를 쓴다)는 tsconfig.test.json 이 따로 본다.
+  // test/ 는 제외한다. 그 안은 node:fs·process 를 쓰는데 이 설정에는 node 타입이 없다.
+  // dist/ 도 제외한다 — 스모크 빌드 산출물의 .d.ts 가 `**/*.ts` 에 걸린다.
+  "extends": "@react-native/typescript-config",
   "compilerOptions": {
-    "target": "ES2020",
-    "lib": ["ES2020"],
-    "types": [],
-
-    // 확장자 없는 상대 경로를 쓴다 — RN 의 Metro 번들러와 tsc 가 함께 이해하는 유일한 형태다.
-    "module": "commonjs",
-    "moduleResolution": "node",
-
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": false,
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true,
-    "skipLibCheck": true,
-    "declaration": true,
-    "sourceMap": true,
-    "rootDir": ".",
-    "outDir": "dist"
+    "types": ["jest"],
+    // app.config.json 을 import 해서 서버 주소를 읽는다 (App.tsx).
+    "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["**/node_modules", "**/Pods", "test", "dist"]
 }

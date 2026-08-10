@@ -3,8 +3,9 @@
 최종 산출물인 모바일 앱이다. 프레임워크는 **React Native** 로 정했다 (`../APP.md`).
 개발은 **Windows PC + Android** 로 시작한다. iOS 는 Mac 이 있어야 하므로 뒤로 미룬다.
 
-지금 이 폴더에 들어 있는 것은 앱 껍데기가 아니라 **`src/api/` — 서버와 말을 주고받는
-계층 하나**다. 왜 그것만 있는지, 그리고 다음에 무엇을 하면 되는지가 이 문서다.
+**이 폴더가 곧 React Native 프로젝트 루트다** (RN 0.86.2 / React 19.2.3).
+그 안에 **`src/api/` — 서버와 말을 주고받는 계층**이 먼저 들어와 있고, 그것만은 이미
+실제 서버에 대고 검증돼 있다 (§5). 무엇이 있고 다음에 무엇을 하면 되는지가 이 문서다.
 
 ---
 
@@ -12,19 +13,35 @@
 
 ```
 app/
+  index.js            RN 진입점 (app.json 의 이름으로 App 을 등록한다)
+  App.tsx             연결 확인 화면 — 스파이크 (§7)
+  app.json            RN 앱 이름 (RN 이 만든 것, 건드리지 않는다)
+  app.config.json     서버 주소 · API 키 · 로케일 — 빈 값으로 커밋돼 있다 (§7)
+
+  android/            Android 네이티브 프로젝트  ← 지금 빌드하는 것
+  ios/                iOS 네이티브 프로젝트     ← Mac 이 생기면 쓴다. 지금은 손대지 않는다
+
   src/api/
-    types.ts        서버 응답·WS 이벤트 타입 (서버 소스를 읽고 맞춘 것)
-    http.ts         fetch 주입, URL 조립, 오류 봉투 → 예외
-    config.ts       GET /v1/config
-    stream.ts       WS 스트리밍 프로토콜 (바이너리 짝짓기 포함)
-    translate.ts    POST /v1/translate/{text,audio}
-    index.ts        입구 — 앱은 이것만 import 한다
+    types.ts          서버 응답·WS 이벤트 타입 (서버 소스를 읽고 맞춘 것)
+    http.ts           fetch 주입, URL 조립, 오류 봉투 → 예외
+    config.ts         GET /v1/config
+    stream.ts         WS 스트리밍 프로토콜 (바이너리 짝짓기 포함)
+    translate.ts      POST /v1/translate/{text,audio}
+    index.ts          입구 — 앱은 이것만 import 한다
   test/
-    smoke.ts        실제 서버에 대고 도는 검증
+    smoke.ts          실제 서버에 대고 도는 검증 (Node 전용)
+
+  tsconfig.json       RN 앱 코드용 (§3)
+  tsconfig.api.json   src/api 이식성 감시자 (§3)
+  tsconfig.test.json  스모크 테스트용 (§3)
 ```
 
-**아직 없는 것**: RN 프로젝트, 화면, 오디오 캡처·재생, 온디바이스 ONNX.
-그것들은 실기기가 있어야 확인되므로 로컬 PC 에서 시작한다 (§5).
+**아직 없는 것**: 오디오 캡처·재생, WebSocket 화면, 온디바이스 ONNX, 네비게이션.
+그것들은 실기기가 있어야 확인되므로 로컬 PC 에서 시작한다 (§6).
+
+**첫 빌드는 의도적으로 순수 RN 이다.** `onnxruntime-react-native` 는 네이티브 빌드를
+바꾸는 의존성이라, 지금 넣으면 첫 빌드가 깨질 때 "RN 자체가 안 되는 건지 ONNX 때문인지"
+구분할 수 없다. 순수 RN + `src/api` 로 한 번 성공시킨 다음 ONNX 를 **하나만** 더한다 (§8).
 
 ---
 
@@ -51,10 +68,7 @@ const session = openStream({
 
 RN 에서 바뀌는 것은 `fetch`/`WebSocket` 을 넘기는 그 줄뿐이다. 덕분에 **실기기 없이
 이 서버에서 Node 로 전부 검증할 수 있었고**, 로컬에서는 오디오와 ONNX 에만 집중하면 된다.
-
-규칙은 컴파일러가 지킨다. `tsconfig.json` 이 `lib: ES2020` + `types: []` 이라
-`window`·`document`·`Buffer`·`process` 를 쓰는 순간 타입 체크가 깨진다.
-(테스트는 Node API 를 쓰므로 `tsconfig.test.json` 이 따로 본다.)
+`App.tsx` 가 실제로 그 한 줄만 쓴다 — `const rnFetch: FetchLike = fetch;` 이고 캐스팅이 없다.
 
 ### 서버 주소도, 경로도, 기본값도 소스에 없다
 
@@ -78,7 +92,29 @@ RN 에서 바뀌는 것은 `fetch`/`WebSocket` 을 넘기는 그 줄뿐이다. �
 
 ---
 
-## 3. 서버는 옮기지 않는다
+## 3. tsconfig 가 세 개인 이유
+
+`src/api` 의 이식성은 **컴파일러가 지키고 있다.** `types: []` + `lib: ES2020` 이라
+`fetch`·`WebSocket`·`window`·`Buffer`·`process` 같은 전역이 아예 존재하지 않고,
+그중 하나라도 쓰는 순간 타입 체크가 깨진다. 이것이 "Node 로 검증하고 RN 에서 그대로 쓴다"를
+가능하게 한 장치라 잃으면 안 된다.
+
+그런데 RN 의 tsconfig 는 `@react-native/typescript-config` 를 확장하고 `types: ["jest"]` 를
+쓴다 — 그대로 덮으면 위 보장이 사라진다. 그래서 하나를 셋으로 나눴다.
+
+| 파일 | 보는 것 | 역할 |
+|---|---|---|
+| `tsconfig.json` | `App.tsx`, `src/`, `__tests__/` | **RN 것.** IDE·Metro·eslint·jest 가 이름만 보고 집는 파일이라 이 이름을 RN 에 준다. `test/`(Node 전용)와 `dist/`(빌드 산출물)는 제외 |
+| `tsconfig.api.json` | `src/` | **이식성 감시자.** `types: []` + `lib: ES2020`. 이 파일이 위의 규칙을 강제한다 |
+| `tsconfig.test.json` | `src/`, `test/` | 스모크 테스트용. `tsconfig.api.json` 을 확장해 `types: ["node"]` 만 더한다. `dist/` 로 컴파일해 Node 로 돌린다 |
+
+`src/api` 가 RN 설정에도 함께 들어오는 것은 괜찮다 — 앱이 실제로 import 하는 코드이니
+같이 봐야 한다. 이식성은 `tsconfig.api.json` 이 지키고, `npm run typecheck` 가 **셋을 다**
+돌리므로 실수는 잡힌다. 하나만 돌리고 넘어가지 말 것.
+
+---
+
+## 4. 서버는 옮기지 않는다
 
 앱은 이미 열려 있는 **`translate.sinsan.kr` 을 부르는 클라이언트**일 뿐이다.
 STT·LLM·TTS·VAD·화자 식별·오류 문구가 전부 서버에 있고, 앱은 마이크와 스피커,
@@ -88,15 +124,16 @@ STT·LLM·TTS·VAD·화자 식별·오류 문구가 전부 서버에 있고, 앱
 
 ---
 
-## 4. 검증하기 (Node — 실기기 없이)
+## 5. 검증하기 (Node — 실기기 없이)
 
 Node 22 이상이면 된다. 서버 주소는 환경변수로 준다.
 
 ```bash
 cd app
 npm install
-npm run typecheck        # src/api 만 — 환경 의존이 없는지까지 함께 본다
-npm run typecheck:test   # 테스트까지
+npm run typecheck        # 세 설정을 모두 (§3) — 하나만 돌리면 이식성 보장이 새어나간다
+npm run lint
+npm test                 # jest — 지금은 App.tsx 가 렌더되는지만 본다
 
 TRANSLATE_BASE_URL=https://translate.sinsan.kr \
 TRANSLATE_AUDIO=/path/to/16k-mono.wav \
@@ -113,11 +150,11 @@ npm run smoke
 스모크 테스트가 보는 것: `/v1/config` 로케일별 파싱 · 텍스트 번역 왕복 ·
 오류 봉투(`code`/`params` 파싱과 로케일별 `detail`) · WS 왕복
 (`ready` → 오디오 전송 → `stt.final` → `llm.final` → `tts.chunk`+바이너리 → `tts.done` → `metrics`) ·
-WS 오류 이벤트.
+WS 오류 이벤트. **29개 전부 통과가 정상이다** — RN 을 얹은 뒤에도 같다.
 
 ---
 
-## 5. 로컬 PC 에서 시작하기 (Windows + Android)
+## 6. 로컬 PC 에서 시작하기 (Windows + Android)
 
 ### 필요한 것
 
@@ -130,26 +167,59 @@ WS 오류 이벤트.
 | **Git** | |
 
 환경변수 `ANDROID_HOME` 을 SDK 경로로 잡고 `platform-tools` 를 PATH 에 넣는다.
-`adb devices` 에 기기가 보이면 준비가 된 것이다.
 
-### 어디서 시작하나
+### 빌드해서 기기에 올리기
 
 ```bash
 git clone <이 저장소> translate
 cd translate/app
 npm install
 npm run typecheck
+
+adb devices              # 기기가 목록에 보여야 한다. 안 보이면 USB 디버깅부터
+npm run android          # 첫 빌드는 Gradle 이 의존성을 받으므로 오래 걸린다
 ```
 
-여기까지가 지금 있는 것이다. 이어서 RN 프로젝트를 이 폴더 안에 만들고
-(`npx @react-native-community/cli init` 등) `src/api/` 를 **그대로** 쓴다.
-이 계층은 이미 서버에 대고 검증돼 있으므로 손대지 않아도 된다.
+`npm run android` 가 Metro(`npm start`)를 함께 띄운다. 이미 떠 있으면 그것을 쓴다.
+앱을 고치면 저장만으로 반영된다 — 네이티브(`android/`)를 건드렸을 때만 다시 빌드한다.
+
+기기가 이 PC 의 Metro 를 못 찾으면 `adb reverse tcp:8081 tcp:8081` 를 한 번 준다.
+
 서버가 살아 있는지는 브라우저로 https://translate.sinsan.kr 을 열어보면 바로 안다 —
 웹 클라이언트가 앱이 할 일을 이미 전부 하고 있다. 막히면 `web/static/app.js` 를 보면 된다.
 
 ---
 
-## 6. 다음 할 일 — `APP.md` §7 의 스파이크 세 가지
+## 7. `App.tsx` — 연결 확인 화면 (스파이크)
+
+지금 앱을 띄우면 나오는 화면이다. 하는 일이 적은 것이 의도다. **이 화면이 확인하는 것은
+딱 하나 — 실기기에서 `RN → src/api → 서버` 경로가 사는가.**
+
+| 누르면 | |
+|---|---|
+| **설정 조회** | `GET /v1/config` → server_id · 로케일 · 프로필 수 · 준비된 엔진 수 · 언어 수 · 세션 기본 언어 · WS 경로 · 마이크 규격 |
+| **텍스트 번역** | `POST /v1/translate/text` → 번역문 · 프로바이더 · 모델 · 소요 시간 |
+
+곁들여 세 가지를 함께 본다.
+
+1. **주입 구조가 실제로 도는가** — `const rnFetch: FetchLike = fetch;` 한 줄이다.
+   캐스팅 없이 타입 체크를 통과하는 것 자체가 `FetchLike` 가 Node 와 RN 양쪽에
+   맞게 선언됐다는 증거다 (스모크 테스트에서 Node 전역을 넘기던 자리와 같다)
+2. **주소가 소스에 없는가** — 서버 주소·API 키·로케일은 `app.config.json` 에서 읽는다.
+   저장소에는 **빈 값으로** 커밋돼 있으므로 그대로 두면 화면에서 입력하게 되고,
+   매번 타이핑이 귀찮으면 그 파일에 적어두면 된다. 소스에는 여전히 없다.
+   단 그 파일은 추적되는 파일이니 **실제 API 키를 적었으면 커밋에 섞지 말 것**
+   (`git checkout -- app.config.json` 으로 되돌린다)
+3. **문구를 앱이 만들지 않는가** — 번역 언어는 `/v1/config` 의
+   `session.default_source_lang`/`default_target_lang` 에서 오고, 오류는 서버가 로케일로
+   렌더한 `detail`(+`code`)을 **그대로** 띄운다
+
+**오디오·WebSocket·ONNX 는 여기 없다.** 위험을 하나씩 더하는 순서를 지키는 것이고,
+그 셋이 §8 이다. 화면 문구는 한국어를 그대로 썼다 — 스파이크라 i18n 대상이 아니다.
+
+---
+
+## 8. 다음 할 일 — `APP.md` §7 의 스파이크 세 가지
 
 프레임워크 결정을 확정하는 실험이다. **가장 위험한 것부터** 찌른다.
 
@@ -157,15 +227,16 @@ npm run typecheck
    `web/static/capture-worklet.js` 와 같은 결과가 나오는지 파형으로 확인한다
 2. **WS 왕복** — 그 프레임을 `session.sendAudio()` 로 그대로 흘려보내고
    `stt.final`/`llm.final`/`tts.chunk` 가 돌아오는가.
-   **이미 Node 로는 통과했다** (§4). 남은 것은 "기기에서 나온 진짜 마이크 프레임"이다
+   **이미 Node 로는 통과했다** (§5). 남은 것은 "기기에서 나온 진짜 마이크 프레임"이다
 3. **ONNX 로드** — `onnxruntime-react-native` 로 Supertonic 모델을 실기기에 올려
-   추론이 도는가. 여기서 막히면 온디바이스 요구가 흔들리므로 가장 먼저 볼 가치가 있다
+   추론이 도는가. 여기서 막히면 온디바이스 요구가 흔들리므로 가장 먼저 볼 가치가 있다.
+   **의존성은 이것 하나만 따로 추가한다** — 순수 RN 빌드가 성공한 것을 확인한 뒤에
 
 셋 다 되면 React Native 확정이다. 3번이 막히면 네이티브 Kotlin 으로 다시 본다.
 
 ---
 
-## 7. 알아두면 좋은 프로토콜 사실
+## 9. 알아두면 좋은 프로토콜 사실
 
 서버 소스를 읽고 확인한 것들이다. 실기기 작업에서 걸리기 쉬운 순서로 적는다.
 
