@@ -14,12 +14,23 @@
 ```
 app/
   index.js            RN 진입점 (app.json 의 이름으로 App 을 등록한다)
-  App.tsx             연결 확인 화면 — 스파이크 (§7)
+  App.tsx             뿌리 — 서버 주소를 들고 두 화면을 전환한다
   app.json            RN 앱 이름 (RN 이 만든 것, 건드리지 않는다)
   app.config.json     서버 주소 · API 키 · 로케일 — 빈 값으로 커밋돼 있다 (§7)
 
   android/            Android 네이티브 프로젝트  ← 지금 빌드하는 것
   ios/                iOS 네이티브 프로젝트     ← Mac 이 생기면 쓴다. 지금은 손대지 않는다
+
+  ui/
+    ConnectScreen.tsx 연결 확인 화면 — 스파이크 (§7)
+    LiveScreen.tsx    실시간 통역 화면 (§8)
+    Button.tsx        두 화면이 함께 쓰는 버튼
+    theme.ts          색과 공용 스타일 조각
+  audio/
+    pcm.ts            Float32↔PCM16 · 리샘플 · 프레이밍 · WAV 읽기 (RN 무의존)
+    capture.ts        마이크 → 규격 PCM16 프레임
+    playback.ts       tts.chunk → 순서대로 이어 재생
+    module.ts         오디오 라이브러리를 늦게 부르는 한 겹 (§8)
 
   src/api/
     types.ts          서버 응답·WS 이벤트 타입 (서버 소스를 읽고 맞춘 것)
@@ -36,12 +47,13 @@ app/
   tsconfig.test.json  스모크 테스트용 (§3)
 ```
 
-**아직 없는 것**: 오디오 캡처·재생, WebSocket 화면, 온디바이스 ONNX, 네비게이션.
-그것들은 실기기가 있어야 확인되므로 로컬 PC 에서 시작한다 (§6).
+**아직 없는 것**: 온디바이스 ONNX, 네비게이션 라이브러리, 프로필·언어를 고르는 화면
+(지금은 `/v1/config` 의 세션 기본값을 그대로 쓴다).
 
-**첫 빌드는 의도적으로 순수 RN 이다.** `onnxruntime-react-native` 는 네이티브 빌드를
-바꾸는 의존성이라, 지금 넣으면 첫 빌드가 깨질 때 "RN 자체가 안 되는 건지 ONNX 때문인지"
-구분할 수 없다. 순수 RN + `src/api` 로 한 번 성공시킨 다음 ONNX 를 **하나만** 더한다 (§8).
+**의존성은 한 번에 하나씩만 늘린다.** 순수 RN + `src/api` 로 첫 빌드를 성공시킨 뒤
+실시간 경로를 위해 `react-native-audio-api` **하나만** 더했다 (§8). 다음 차례인
+`onnxruntime-react-native` 도 같은 방식으로 따로 넣는다 — 그래야 빌드가 깨졌을 때
+"RN 자체가 안 되는 건지 방금 넣은 것 때문인지" 구분된다.
 
 ---
 
@@ -133,7 +145,7 @@ cd app
 npm install
 npm run typecheck        # 세 설정을 모두 (§3) — 하나만 돌리면 이식성 보장이 새어나간다
 npm run lint
-npm test                 # jest — 지금은 App.tsx 가 렌더되는지만 본다
+npm test                 # jest — 아래 세 묶음
 
 TRANSLATE_BASE_URL=https://translate.sinsan.kr \
 TRANSLATE_AUDIO=/path/to/16k-mono.wav \
@@ -151,6 +163,27 @@ npm run smoke
 오류 봉투(`code`/`params` 파싱과 로케일별 `detail`) · WS 왕복
 (`ready` → 오디오 전송 → `stt.final` → `llm.final` → `tts.chunk`+바이너리 → `tts.done` → `metrics`) ·
 WS 오류 이벤트. **29개 전부 통과가 정상이다** — RN 을 얹은 뒤에도 같다.
+
+`npm test` 는 두 가지를 본다.
+
+- `__tests__/App.test.tsx` — App.tsx 가 렌더되는지
+- `__tests__/capture.test.ts` — `audio/capture.ts` 의 **배선**. 라이브러리를 늦게 부르는
+  경로가 이어지는지, `/v1/config` 규격이 그대로 `onAudioReady` 옵션으로 가는지,
+  성공 봉투(`{status:'success'}`)를 실패로 오해하지 않는지
+- `__tests__/pcm.test.ts` — **`audio/pcm.ts` 의 계산.** PCM16 변환·클리핑,
+  20ms 프레이밍(320샘플 = 640바이트, 자투리는 다음 프레임으로), 48k→16k 리샘플
+  (샘플 수와 주파수가 보존되는지), WAV 읽기(**헤더의 44.1kHz 를 쓰고 fallback 을 쓰지 않는지**,
+  스테레오 다운믹스, 헤더도 `sr` 도 없으면 조용히 재생하지 않고 던지는지)
+
+그러느라 `react-native-audio-api` 는 그 패키지가 제공하는 목(`react-native-audio-api/mock`)
+으로 바꿔 끼운다 (`jest.config.js`). jest 는 네이티브 모듈이 없는 Node 에서 돌기 때문이다.
+
+**여기서 확인되지 않는 것이 있다.** 위는 전부 Node 에서 도는 검사라
+`ui/LiveScreen.tsx`·`audio/capture.ts`·`audio/playback.ts` 가 **실기기에서** 도는지는
+알려주지 않는다. 마이크가 실제로 열리는지, `onAudioReady` 가 요청한 규격대로 올려주는지,
+스피커에서 제 속도로 나는지는 §8 의 "실기기에서 볼 것"으로만 확인된다.
+`audio/pcm.ts` 가 그 사이에서 계산을 맡고 있으므로, 실기기에서 소리가 이상하면
+**"계산이 틀렸나"는 이 테스트가 이미 답해준 셈**이고 네이티브 쪽부터 보면 된다.
 
 ---
 
@@ -183,6 +216,10 @@ npm run android          # 첫 빌드는 Gradle 이 의존성을 받으므로 �
 `npm run android` 가 Metro(`npm start`)를 함께 띄운다. 이미 떠 있으면 그것을 쓴다.
 앱을 고치면 저장만으로 반영된다 — 네이티브(`android/`)를 건드렸을 때만 다시 빌드한다.
 
+**이전에 빌드해 둔 APK 가 있으면 한 번은 다시 빌드해야 한다.** `react-native-audio-api` 는
+네이티브(C++/oboe)를 얹는 의존성이고 `AndroidManifest.xml` 에 `RECORD_AUDIO` 가 늘었다.
+JS 만 새로고침하면 실시간 화면에서 마이크가 안 열린다.
+
 기기가 이 PC 의 Metro 를 못 찾으면 `adb reverse tcp:8081 tcp:8081` 를 한 번 준다.
 
 서버가 살아 있는지는 브라우저로 https://translate.sinsan.kr 을 열어보면 바로 안다 —
@@ -190,10 +227,14 @@ npm run android          # 첫 빌드는 Gradle 이 의존성을 받으므로 �
 
 ---
 
-## 7. `App.tsx` — 연결 확인 화면 (스파이크)
+## 7. 연결 확인 화면 (스파이크) — `ui/ConnectScreen.tsx`
 
-지금 앱을 띄우면 나오는 화면이다. 하는 일이 적은 것이 의도다. **이 화면이 확인하는 것은
+앱을 띄우면 처음 나오는 화면이다. 하는 일이 적은 것이 의도다. **이 화면이 확인하는 것은
 딱 하나 — 실기기에서 `RN → src/api → 서버` 경로가 사는가.**
+
+**실시간 화면이 생겼다고 이 화면을 지우지 않았다.** 실시간 경로가 막혔을 때
+"서버는 살아 있다"를 확인할 유일한 수단이라서다. 위쪽 탭으로 오간다 —
+화면이 둘뿐이라 네비게이션 라이브러리 대신 상태 하나로 전환한다.
 
 | 누르면 | |
 |---|---|
@@ -214,25 +255,125 @@ npm run android          # 첫 빌드는 Gradle 이 의존성을 받으므로 �
    `session.default_source_lang`/`default_target_lang` 에서 오고, 오류는 서버가 로케일로
    렌더한 `detail`(+`code`)을 **그대로** 띄운다
 
-**오디오·WebSocket·ONNX 는 여기 없다.** 위험을 하나씩 더하는 순서를 지키는 것이고,
-그 셋이 §8 이다. 화면 문구는 한국어를 그대로 썼다 — 스파이크라 i18n 대상이 아니다.
+**오디오·WebSocket 은 여기 없다.** 위험을 하나씩 더하는 순서를 지키는 것이고,
+그것이 §8 이다. 화면 문구는 한국어를 그대로 썼다 — 스파이크라 i18n 대상이 아니다.
 
 ---
 
-## 8. 다음 할 일 — `APP.md` §7 의 스파이크 세 가지
+## 8. 실시간 통역 화면 — `ui/LiveScreen.tsx`
 
-프레임워크 결정을 확정하는 실험이다. **가장 위험한 것부터** 찌른다.
+**마이크로 말하면 번역된 음성이 나오는 경로다.** 웹 클라이언트(`web/static/app.js` 의
+handsfree 입력 방식)가 하는 일을 앱으로 옮긴 것이고, 흐름도 같다.
 
-1. **원시 PCM 캡처** — 16kHz mono PCM16 20ms 프레임이 실제로 나오는가.
-   `web/static/capture-worklet.js` 와 같은 결과가 나오는지 파형으로 확인한다
-2. **WS 왕복** — 그 프레임을 `session.sendAudio()` 로 그대로 흘려보내고
-   `stt.final`/`llm.final`/`tts.chunk` 가 돌아오는가.
-   **이미 Node 로는 통과했다** (§5). 남은 것은 "기기에서 나온 진짜 마이크 프레임"이다
-3. **ONNX 로드** — `onnxruntime-react-native` 로 Supertonic 모델을 실기기에 올려
-   추론이 도는가. 여기서 막히면 온디바이스 요구가 흔들리므로 가장 먼저 볼 가치가 있다.
-   **의존성은 이것 하나만 따로 추가한다** — 순수 RN 빌드가 성공한 것을 확인한 뒤에
+```
+권한 → GET /v1/config → WS 열기(config 전송) → ready → 마이크 캡처 시작
+     → PCM16 20ms 프레임 …  → vad / stt / llm / tts.chunk(+오디오) / metrics
+```
 
-셋 다 되면 React Native 확정이다. 3번이 막히면 네이티브 Kotlin 으로 다시 본다.
+### 화면에서 무엇을 보는가
+
+| | |
+|---|---|
+| **상태** | 대기 중 / 말하는 중 / 처리 중 / 재생 중 — `vad` 와 재생 상태로 바뀐다 |
+| **레벨 미터 · 보낸 프레임** | 마이크가 실제로 듣고 있는지, 프레임이 실제로 나가고 있는지. **막혔을 때 여기부터 본다** |
+| **세션** | `ready` 가 알려준 session_id · 프로필 / 모드 / 턴 정책 · **서버가 확정한 입력 규격** · VAD 백엔드 |
+| **SEG n** | 세그먼트 하나. 원문(`stt.*`) → 번역문(`llm.*`, 수신자별) → 지표(`metrics`) |
+| **오류** | 서버가 준 `error.message` **그대로.** 앱이 문장을 만들지 않는다 |
+| **기록** | 리샘플 통지 · 너무 짧은 발화 · 재생한 오디오 규격 · 소켓 종료 코드 등 진단 부스러기 |
+
+지표는 서버가 보낸 키를 그대로 편다 — `stt_ms`, `llm_ms.<수신자>`, `tts_ms.<수신자>`,
+`total_ms`, `audio_duration_s` …. **앱에 키 목록이 없다.** 서버가 지표를 하나 더하면
+이 파일을 고치지 않아도 화면에 뜬다.
+
+`speaker.rejected` 는 오류가 아니라 "이 세그먼트를 처리하지 않았다"이므로
+세그먼트에 사유만 붙여 표시하고 오류 상자에는 넣지 않는다.
+
+### 권한을 거부하면
+
+`통역 시작`을 누르면 먼저 `RECORD_AUDIO` 를 묻는다 (`PermissionsAndroid`).
+
+| 답 | 화면 |
+|---|---|
+| 허용 | 그대로 진행 — 설정 조회 → WS → 캡처 |
+| 거부 | **오류 상자**: "마이크 권한이 거부됐다. 권한 없이는 캡처를 시작할 수 없다." 다시 누르면 다시 묻는다 |
+| 다시 묻지 않음 | **오류 상자**: 기기의 설정 → 앱 → 권한에서 직접 켜야 한다고 알린다. 안드로이드가 더 이상 대화상자를 띄우지 않으므로 앱에서 할 수 있는 것이 없다 |
+
+권한이 없으면 **WS 도 열지 않는다.** 마이크 없이 세션만 열려 있는 상태를 만들지 않기 위해서다.
+
+### 실기기에서 볼 것
+
+1. 앱을 띄우고 서버 주소를 넣는다 (탭을 바꿔도 주소는 그대로 남는다)
+2. **연결 확인** 탭에서 `설정 조회` 가 되는지 먼저 본다 — 여기가 안 되면 실시간도 안 된다
+3. **실시간 통역** 탭 → `통역 시작` → 마이크 권한 허용
+4. **세션** 상자에 `서버 확정 규격 16000Hz 1ch pcm16 · 20ms` 가 뜨는지 본다
+5. 말한다 → 상태가 `말하는 중` 으로 바뀌고 레벨 미터가 움직이는지, `보낸 프레임` 이 느는지
+6. 말을 멈춘다 → `처리 중` → **SEG 0** 에 원문 → 번역문 → **소리** → 지표
+
+### 막혔을 때 어디를 보나
+
+| 증상 | 볼 곳 |
+|---|---|
+| 화면이 아예 안 뜬다 / 빨간 화면 | **Metro 로그** (`npm start` 를 띄운 창). JS 오류는 거기 전부 찍힌다 |
+| `통역 시작` 이 오류 상자로 끝난다 | 문장을 읽는다. **서버 문장이면 서버 문제**(코드가 함께 뜬다), 권한 문장이면 기기 설정 |
+| 프레임은 나가는데 아무 이벤트가 없다 | 서버 쪽 VAD. `기록` 에 "발화가 너무 짧아 버려졌다"가 뜨는지, 레벨 미터가 실제로 움직이는지 |
+| `보낸 프레임` 이 0 에서 안 는다 | 마이크가 안 열린 것이다. `adb logcat -s AudioPlayer AndroidAudioRecorder ReactNativeJS` — oboe 가 스트림을 못 연 이유가 여기 찍힌다 |
+| 소리가 이상하다 (빠르거나 느리다) | `기록` 의 `TTS 오디오 wav 44100Hz 1ch` 줄. 이 값과 실제 재생이 어긋나면 재생 컨텍스트 문제다 (`audio/playback.ts` 의 주석) |
+| 서버가 살아 있는지 모르겠다 | **연결 확인** 탭. 그것도 안 되면 브라우저로 서버 웹 클라이언트를 열어본다 — 앱이 할 일을 이미 전부 하고 있다 |
+
+`adb logcat` 은 `adb logcat *:S ReactNativeJS:V` 로 JS 로그만 걸러 보는 편이 빠르다.
+
+### 라이브러리를 어떻게 썼나 — `react-native-audio-api` 0.13.2
+
+**캡처는 `AudioRecorder` 하나로 한다.** 웹의 `getUserMedia` + `AudioContext(rate)` +
+AudioWorklet 조합에 해당한다.
+
+```ts
+recorder.onAudioReady(
+  { sampleRate, bufferLength: frameSamples, channelCount },   // 전부 /v1/config 에서
+  event => { /* event.buffer 는 Float32 AudioBuffer */ },
+);
+await recorder.start();
+```
+
+이 라이브러리의 **워크릿 노드**(`createWorkletNode` 등)를 쓰지 않은 이유는
+`react-native-worklets` 를 함께 깔아야 하기 때문이다 — package.json 의
+`peerDependenciesMeta` 에서 optional 이라 없어도 설치는 되지만 그 기능만 못 쓴다.
+20ms 프레임을 소켓으로 흘려보내는 데는 `onAudioReady` 로 충분하고, 의존성도 하나로 끝난다.
+
+**규격은 믿지 않는다.** `onAudioReady` 의 옵션은 라이브러리 문서가 "선호값"이라고 적어둔
+것이고, 실제 값은 기기에 따라 다를 수 있다고 그 doc comment에 그대로 있다. 그래서
+올라온 버퍼의 `sampleRate` 를 확인하고 어긋나면 `audio/pcm.ts` 의 리샘플러가 맞춘다
+(`capture-worklet.js` 와 같은 선형 보간이다). 서버는 다른 레이트를 받으면 끊는다.
+
+**재생은 청크의 샘플레이트로 `AudioContext` 를 연다.**
+
+```ts
+const context = new AudioContext({ sampleRate });   // tts.chunk 의 sr (또는 WAV 헤더)
+const buffer = context.createBuffer(1, samples.length, sampleRate);
+buffer.copyToChannel(samples, 0);
+```
+
+컨텍스트 레이트를 굳이 맞추는 이유는 **이 라이브러리가 버퍼와 컨텍스트의 레이트가 다를 때
+리샘플해주지 않기 때문이다** — `AudioBufferBaseSourceNode` 가 playbackRate·detune 만
+곱하고 버퍼의 sampleRate 는 보지 않는다(라이브러리 C++ 소스에서 확인). 44.1k 버퍼를
+48k 컨텍스트에 넣으면 그만큼 빨라진다. 컨텍스트를 44100 으로 열면 기기 출력까지는
+안드로이드 쪽(oboe)이 맞춰준다.
+
+청크는 프라미스 체인으로 한 줄로 세우고 재생 시각을 직전 청크 끝에 붙인다 —
+지금은 세그먼트당 청크가 하나지만 여러 개가 이어서 와도 순서대로 재생된다.
+
+**라이브러리를 파일 맨 위에서 값으로 import 하지 않았다** (`audio/module.ts`).
+이 라이브러리는 import 되는 순간 네이티브 모듈을 설치하고 못 찾으면 그 자리에서 던지는데,
+그 예외가 번들 평가 중에 터지면 **앱 전체가 뜨지 않는다** — 연결 확인 화면까지 함께 죽는다.
+JS 만 새로고침하고 APK 를 다시 빌드하지 않았을 때 실제로 그렇게 된다. 그래서 타입만 위에서
+가져오고 실물은 마이크를 열 때 부른다. 그러면 그 실패가 **실시간 화면의 오류 상자에만** 뜨고
+연결 확인 화면은 그대로 산다 — "지금 되는 것을 잃지 않는다"가 이 한 겹의 목적이다.
+
+### 다음 — 온디바이스 ONNX
+
+남은 스파이크는 `onnxruntime-react-native` 로 Supertonic 모델을 실기기에 올리는 것이다
+(`APP.md` §7). **의존성은 그것 하나만 따로 추가한다** — 실시간 경로가 도는 것을 확인한 뒤에.
+여기서 막히면 온디바이스 요구가 흔들리므로 네이티브 Kotlin 으로 다시 본다.
 
 ---
 

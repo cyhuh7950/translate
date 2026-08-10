@@ -2,6 +2,18 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      실시간 통역 화면이 마이크를 연다 (react-native-audio-api 의 AudioRecorder).
+      선언만으로는 부족하고 실행 중에도 물어봐야 한다 — ui/LiveScreen.tsx 의 PermissionsAndroid.
+
+      라이브러리 문서가 함께 언급하는 MODIFY_AUDIO_SETTINGS / FOREGROUND_SERVICE 는 넣지 않았다.
+      전자는 오디오 모드·스피커를 바꿀 때 필요한데 이 라이브러리는 오디오 포커스만 요청하고
+      (requestAudioFocus 에는 이 권한이 필요 없다), 후자는 잠금화면 재생 알림
+      (PlaybackNotificationManager)을 쓸 때의 것이라 이 앱은 쓰지 않는다.
+      필요해지면 그때 하나씩 더한다.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"
