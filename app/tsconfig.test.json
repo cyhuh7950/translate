@@ -1,0 +1,10 @@
+{
+  // 스모크 테스트용. src 와 test 를 함께 보되 Node 타입을 허용한다.
+  // src/api 자체의 무의존성은 tsconfig.json(`types: []`)이 지킨다 — 이 파일은 그것을 느슨하게
+  // 하므로, 검증할 때는 두 설정을 **모두** 돌려야 한다.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src", "test"]
+}

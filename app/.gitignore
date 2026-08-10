@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# RN 프로젝트가 붙으면 아래도 생긴다
+.expo/
+android/app/build/
+android/.gradle/
+ios/Pods/
+*.keystore

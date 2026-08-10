@@ -1,0 +1,32 @@
+{
+  // src/api 전용 설정. `types: []` 와 `lib: ES2020` 이 이 계층의 규칙을 **기계로** 강제한다.
+  //
+  //   - DOM 을 넣지 않으므로 `fetch` / `WebSocket` / `window` 전역이 존재하지 않는다
+  //   - @types/node 를 넣지 않으므로 `Buffer` / `process` / `require` 도 없다
+  //
+  // 그래서 src/api 가 실수로 브라우저나 Node 에 기대면 여기서 컴파일이 깨진다.
+  // 테스트(Node 전용 API 를 쓴다)는 tsconfig.test.json 이 따로 본다.
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "types": [],
+
+    // 확장자 없는 상대 경로를 쓴다 — RN 의 Metro 번들러와 tsc 가 함께 이해하는 유일한 형태다.
+    "module": "commonjs",
+    "moduleResolution": "node",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "sourceMap": true,
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["src"]
+}
