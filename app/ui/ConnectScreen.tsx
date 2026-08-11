@@ -14,8 +14,9 @@
  *
  *   1. **주입** — `src/api` 는 전역을 찾지 않는다. RN 의 `fetch` 를 App.tsx 가 넘긴다.
  *   2. **주소를 박지 않는다** — 기본값은 소스가 아니라 app.config.json 에서 온다.
- *   3. **문구를 만들지 않는다** — 번역 언어는 `/v1/config` 의 세션 기본값에서 오고,
- *      오류는 서버가 로케일로 렌더한 `detail` 을 그대로 띄운다. 앱에 카탈로그가 없다.
+ *   3. **문구를 만들지 않는다** — 번역 언어는 설정 화면에서 고른 값(고르지 않았으면
+ *      `/v1/config` 의 세션 기본값)이고, 오류는 서버가 로케일로 렌더한 `detail` 을
+ *      그대로 띄운다. 앱에 카탈로그가 없다.
  */
 
 import { useState } from 'react';
@@ -24,6 +25,8 @@ import { ActivityIndicator, Text, TextInput, View } from 'react-native';
 import { availableProfiles, fetchConfig, readyEngines, translateText } from '../src/api';
 import type { ApiClient, ServerConfig } from '../src/api';
 import { Button } from './Button';
+import { chosenLanguages } from './settings';
+import type { Settings } from './settings';
 import { ui } from './theme';
 import type { Palette } from './theme';
 
@@ -32,17 +35,23 @@ export function ConnectScreen({
   makeClient,
   locale,
   errorText,
+  config,
+  onConfig,
+  form,
 }: {
   colors: Palette;
-  /** 서버 주소·API 키는 App.tsx 가 들고 있다 — 두 화면이 같은 값을 쓴다. */
+  /** 서버 주소·API 키는 App.tsx 가 들고 있다 — 세 화면이 같은 값을 쓴다. */
   makeClient: () => ApiClient | null;
   locale: string;
   errorText: (err: unknown) => string;
+  /** `/v1/config` 응답도 App.tsx 가 들고 있다 — 설정 화면과 같은 것을 본다. */
+  config: ServerConfig | null;
+  onConfig: (config: ServerConfig) => void;
+  /** 설정 화면에서 고른 값. 번역 버튼이 쓸 언어가 여기서 나온다. */
+  form: Settings;
 }) {
   const [text, setText] = useState('안녕하세요, 오늘 회의는 세 시에 시작합니다.');
 
-  /** `/v1/config` 응답. 번역 버튼이 쓸 언어가 여기서 온다. */
-  const [config, setConfig] = useState<ServerConfig | null>(null);
   const [busy, setBusy] = useState<'config' | 'translate' | null>(null);
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
@@ -66,7 +75,8 @@ export function ConnectScreen({
     if (!client) return;
     try {
       const cfg = await fetchConfig(client);
-      setConfig(cfg);
+      onConfig(cfg);
+      const langs = chosenLanguages(cfg, form);
       setResult(
         [
           `server_id     ${cfg.server_id}`,
@@ -76,6 +86,7 @@ export function ConnectScreen({
           `언어           ${cfg.languages.length}`,
           `세션 기본값     ${cfg.session.default_source_lang} → ${cfg.session.default_target_lang}` +
             `  (${cfg.session.default_profile} / ${cfg.session.default_mode})`,
+          `고른 언어      ${langs.source} → ${langs.target}   (설정 화면)`,
           `WS 경로        ${cfg.stream.path}`,
           `마이크 규격     ${cfg.audio.stt_sample_rate}Hz ${cfg.audio.stt_channels}ch` +
             ` · ${cfg.stream.client_frame_ms}ms 프레임`,
@@ -94,12 +105,14 @@ export function ConnectScreen({
     try {
       // 언어 코드도 소스에 없다. 아직 조회하지 않았으면 지금 조회한다.
       const cfg = config ?? (await fetchConfig(client));
-      setConfig(cfg);
+      onConfig(cfg);
 
+      // 설정 화면에서 고른 언어로 번역한다 — 고르지 않았으면 서버의 세션 기본값이다.
+      const langs = chosenLanguages(cfg, form);
       const out = await translateText(client, {
         text,
-        source_lang: cfg.session.default_source_lang,
-        target_lang: cfg.session.default_target_lang,
+        source_lang: langs.source,
+        target_lang: langs.target,
       });
       setResult(
         [

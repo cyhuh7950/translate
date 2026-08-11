@@ -34,11 +34,12 @@ import type {
   MetricsEvent,
   ServerConfig,
   SttEvent,
-  StreamConfigMessage,
   StreamSession,
   WebSocketLike,
 } from '../src/api';
 import { Button } from './Button';
+import { streamConfig } from './settings';
+import type { Settings } from './settings';
 import { ui } from './theme';
 import type { Palette } from './theme';
 
@@ -143,11 +144,21 @@ export function LiveScreen({
   makeClient,
   locale,
   errorText,
+  form,
+  onConfig,
 }: {
   colors: Palette;
   makeClient: () => ApiClient | null;
   locale: string;
   errorText: (err: unknown) => string;
+  /**
+   * 설정 화면에서 고른 값. **세션이 이 값으로 열린다** — 비어 있으면 서버 기본값이다.
+   * 매번 새로 받은 `/v1/config` 위에 얹으므로, 서버가 목록을 바꿔 고른 값이 더는 쓸 수
+   * 없게 되면 `streamConfig()` 가 고를 수 있는 값으로 물러난다.
+   */
+  form: Settings;
+  /** 여기서 받아온 설정을 App 에 돌려준다 — 설정 화면이 같은 응답을 쓴다. */
+  onConfig?: (config: ServerConfig) => void;
 }) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [live, setLive] = useState<Live>('listening');
@@ -237,6 +248,7 @@ export function LiveScreen({
     setPhase('connecting');
     try {
       const config = await fetchConfig(client);
+      if (onConfig) onConfig(config);
       await connect(client, config);
     } catch (err) {
       setError(errorText(err));
@@ -264,14 +276,9 @@ export function LiveScreen({
     });
     playerRef.current = player;
 
-    // 빈 값은 넣지 않는다 — 서버는 없는 키에만 자기 기본값을 쓴다.
-    const message: StreamConfigMessage = {
-      type: 'config',
-      source_lang: config.session.default_source_lang,
-      target_lang: config.session.default_target_lang,
-      sample_rate: config.audio.stt_sample_rate,
-    };
-    if (locale) message.locale = locale;
+    // **설정 화면에서 고른 값이 여기로 들어온다.** 고르지 않은 것은 서버 기본값이고,
+    // 빈 값은 아예 넣지 않는다 — 서버는 없는 키에만 자기 기본값을 쓴다.
+    const message = streamConfig(config, form, locale);
 
     // 인증 헤더는 여기서 붙인다. 브라우저와 달리 앱은 WS 핸드셰이크에 헤더를 실을 수 있다.
     const headers = authHeaders(client);

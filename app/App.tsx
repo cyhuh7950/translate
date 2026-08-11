@@ -1,25 +1,30 @@
 /**
- * 앱의 뿌리 — 서버 주소를 들고, 두 화면을 전환한다.
+ * 앱의 뿌리 — 서버 주소와 **고른 설정**을 들고, 세 화면을 전환한다.
  *
  *   연결 확인   `ui/ConnectScreen.tsx`  — RN → src/api → 서버 경로가 사는가 (스파이크)
+ *   설정        `ui/SettingsScreen.tsx` — 통역할 언어·프로필·모드·엔진을 고른다
  *   실시간 통역 `ui/LiveScreen.tsx`     — 마이크 → WS → 원문 · 번역문 · 번역 음성
  *
  * **연결 확인 화면을 남겨둔 것은 의도다.** 실시간 경로가 안 될 때 "서버는 살아 있다"를
  * 확인할 유일한 수단이라, 실시간 화면이 생겼다고 지우지 않는다.
  *
- * 화면 전환에 네비게이션 라이브러리를 넣지 않았다 — 화면이 둘뿐이라 상태 하나면 된다.
- * 의존성은 한 번에 하나씩만 늘린다(이번에 늘어난 것은 `react-native-audio-api` 하나다).
+ * 화면 전환에 네비게이션 라이브러리를 넣지 않았다 — 상태 하나로 충분하다. 셋으로 늘어난
+ * 지금도 마찬가지다. 의존성은 한 번에 하나씩만 늘린다(마지막으로 늘어난 것은
+ * `react-native-audio-api` 하나이고, 설정 화면은 아무것도 더하지 않았다).
  *
- * 이 파일이 지고 있는 나머지 두 가지.
+ * 이 파일이 지고 있는 나머지 세 가지.
  *
  *   1. **환경 주입** — `src/api` 는 전역을 찾지 않는다. RN 의 `fetch` 를 여기서 넘긴다.
  *      캐스팅이 없다는 것이 요점이다 — `FetchLike` 는 Node 의 전역 fetch 와 RN 의 전역
  *      fetch 가 **둘 다 그대로 대입되도록** 구조만 선언해 둔 타입이다.
  *   2. **주소를 박지 않는다** — 서버 주소·API 키·로케일은 app.config.json 에서 오고,
  *      비어 있으면 화면에서 입력받는다. 소스에는 없다.
+ *   3. **고른 설정을 들고 있는다** — 설정 화면이 고치고, 나머지 두 화면이 읽는다.
+ *      화면을 오가도 값이 남아야 하기 때문에 여기에 둔다. 다만 **앱을 껐다 켜면 사라진다** —
+ *      저장하려면 AsyncStorage(네이티브)가 필요해서 이번에는 넣지 않았다 (README §10).
  */
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -34,9 +39,11 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 
 import appConfig from './app.config.json';
 import { ApiError, StreamError } from './src/api';
-import type { ApiClient, FetchLike } from './src/api';
+import type { ApiClient, FetchLike, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
 import { LiveScreen } from './ui/LiveScreen';
+import { SettingsScreen } from './ui/SettingsScreen';
+import type { Settings } from './ui/settings';
 import { dark, light, ui } from './ui/theme';
 import type { Palette } from './ui/theme';
 
@@ -70,7 +77,14 @@ function errorText(err: unknown): string {
   return String(err);
 }
 
-type Tab = 'connect' | 'live';
+type Tab = 'connect' | 'settings' | 'live';
+
+/** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'connect', label: '연결 확인' },
+  { id: 'settings', label: '설정' },
+  { id: 'live', label: '실시간 통역' },
+];
 
 function App() {
   const isDark = useColorScheme() === 'dark';
@@ -90,15 +104,28 @@ function Root({ isDark }: { isDark: boolean }) {
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
 
-  /** 두 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
-  function makeClient(): ApiClient | null {
+  /**
+   * 화면들이 공유하는 두 가지.
+   *
+   *   config  마지막으로 받은 `/v1/config`. 설정 화면이 이것으로 폼을 만들고,
+   *           실시간 화면이 세션을 열 때 받아온 것을 여기에 다시 넣어준다.
+   *   form    사용자가 고른 값. 비어 있으면 전부 서버 기본값이라는 뜻이다.
+   */
+  const [config, setConfig] = useState<ServerConfig | null>(null);
+  const [form, setForm] = useState<Settings>({});
+
+  /** 세 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
+  const makeClient = useCallback((): ApiClient | null => {
     const url = baseUrl.trim();
     if (!url) return null;
     const client: ApiClient = { baseUrl: url, fetch: rnFetch };
     if (apiKey.trim()) client.apiKey = apiKey.trim();
     if (LOCALE) client.locale = LOCALE;
     return client;
-  }
+  }, [baseUrl, apiKey]);
+
+  const shared = { colors, makeClient, locale: LOCALE, errorText };
+  const active = TABS.find(t => t.id === tab);
 
   return (
     <ScrollView
@@ -109,12 +136,19 @@ function Root({ isDark }: { isDark: boolean }) {
       ]}
       keyboardShouldPersistTaps="handled">
       <Text style={[ui.title, { color: colors.fg }]}>
-        {tab === 'connect' ? '연결 확인' : '실시간 통역'}
+        {active ? active.label : ''}
       </Text>
 
       <View style={styles.tabs}>
-        <Tab2 label="연결 확인" active={tab === 'connect'} onPress={() => setTab('connect')} colors={colors} />
-        <Tab2 label="실시간 통역" active={tab === 'live'} onPress={() => setTab('live')} colors={colors} />
+        {TABS.map(t => (
+          <TabButton
+            key={t.id}
+            label={t.label}
+            active={tab === t.id}
+            onPress={() => setTab(t.id)}
+            colors={colors}
+          />
+        ))}
       </View>
 
       <Text style={[ui.label, { color: colors.dim }]}>서버 주소</Text>
@@ -141,29 +175,27 @@ function Root({ isDark }: { isDark: boolean }) {
       />
 
       <View style={styles.screen}>
-        {/* 두 화면을 동시에 살려두지 않는다 — 실시간 화면이 사라지면 마이크도 함께 닫힌다. */}
-        {tab === 'connect' ? (
-          <ConnectScreen
-            colors={colors}
-            makeClient={makeClient}
-            locale={LOCALE}
-            errorText={errorText}
-          />
-        ) : (
-          <LiveScreen
-            colors={colors}
-            makeClient={makeClient}
-            locale={LOCALE}
-            errorText={errorText}
+        {/* 화면을 동시에 살려두지 않는다 — 실시간 화면이 사라지면 마이크도 함께 닫힌다. */}
+        {tab === 'connect' && (
+          <ConnectScreen {...shared} config={config} onConfig={setConfig} form={form} />
+        )}
+        {tab === 'settings' && (
+          <SettingsScreen
+            {...shared}
+            config={config}
+            onConfig={setConfig}
+            form={form}
+            onForm={setForm}
           />
         )}
+        {tab === 'live' && <LiveScreen {...shared} onConfig={setConfig} form={form} />}
       </View>
     </ScrollView>
   );
 }
 
-/** 화면 전환 탭. 네비게이션 라이브러리 대신 쓰는 두 칸짜리 토글이다. */
-function Tab2({
+/** 화면 전환 탭. 네비게이션 라이브러리 대신 쓰는 토글이다. */
+function TabButton({
   label,
   active,
   onPress,
