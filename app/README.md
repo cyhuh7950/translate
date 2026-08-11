@@ -143,14 +143,27 @@ Node 22 이상이면 된다. 서버 주소는 환경변수로 준다.
 ```bash
 cd app
 npm install
-npm run typecheck        # 세 설정을 모두 (§3) — 하나만 돌리면 이식성 보장이 새어나간다
-npm run lint
-npm test                 # jest — 아래 세 묶음
+npm run verify           # ← 기기에 올리기 전에 반드시 이것부터
 
 TRANSLATE_BASE_URL=https://translate.sinsan.kr \
 TRANSLATE_AUDIO=/path/to/16k-mono.wav \
-npm run smoke
+npm run smoke            # 서버까지 함께 (네트워크 필요)
 ```
+
+`npm run verify` 는 넷을 순서대로 돌린다. **하나라도 깨지면 기기로 가지 않는다.**
+
+| | 무엇을 잡는가 |
+|---|---|
+| `bundle:check` | 모듈 해석·문법. 깨지면 기기에서 "Unable to load script" 가 뜬다 |
+| `typecheck` | 세 설정 모두 (§3). 하나만 돌리면 이식성 보장이 새어나간다 |
+| `lint` | |
+| `test` | **두 화면이 실제로 그려지는지**, 리샘플·프레이밍·WAV 파싱, 스텁의 불활성 |
+
+**이 관문은 사고를 두 번 겪고 만들었다.** 한 번은 번들이 만들어지지 않는 채로 기기에
+올려 "Unable to load script" 가 떴고, 한 번은 스텁이 모듈 평가 중에 예외를 던져 앱이
+화면 한 번 못 그리고 종료됐다. 둘 다 `bundle:check` 와 렌더 테스트로 잡혔을 것들이다.
+게다가 그때 있던 렌더 테스트는 `SafeAreaProvider` 가 인셋을 못 재 **빈 트리를 그리며
+통과하고 있었다** — 지금은 `jest.setup.js` 가 그것을 막는다.
 
 | 환경변수 | |
 |---|---|

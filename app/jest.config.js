@@ -1,6 +1,9 @@
 module.exports = {
   preset: '@react-native/jest-preset',
 
+  // 화면이 실제로 그려지도록 하는 준비. 왜 필요한지는 jest.setup.js 에 적었다.
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+
   // jest 는 네이티브 모듈이 없는 Node 에서 돈다. react-native-audio-api 가 제공하는
   // 목 진입점으로 바꿔 끼운다 (패키지의 `mock/` 서브패스). 이렇게 해야 App.tsx 렌더
   // 테스트가 오디오 라이브러리를 건드리지 않고 지나간다.

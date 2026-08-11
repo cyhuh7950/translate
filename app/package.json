@@ -14,7 +14,9 @@
     "typecheck:api": "tsc --noEmit -p tsconfig.api.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "build:test": "tsc -p tsconfig.test.json",
-    "smoke": "npm run build:test && node dist/test/smoke.js"
+    "smoke": "npm run build:test && node dist/test/smoke.js",
+    "verify": "npm run bundle:check && npm run typecheck && npm run lint && npm test",
+    "bundle:check": "react-native bundle --platform android --dev true --entry-file index.js --bundle-output /tmp/verify.bundle"
   },
   "dependencies": {
     "react": "19.2.3",
