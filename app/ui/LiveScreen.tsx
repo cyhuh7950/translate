@@ -7,6 +7,19 @@
  *   권한 → GET /v1/config → WS 열기(config 전송) → ready → 마이크 캡처 시작
  *        → PCM16 20ms 프레임 …  → vad / stt / llm / tts.chunk(+오디오) / metrics
  *
+ * **입력 방식(`input_mode`)을 따른다.** 설정 화면이 고른 값이고 목록은 `/v1/config` 의
+ * `client.input_modes` 에서 온다. 구현은 `ui/inputMode.ts` 에 있고, 이 화면이 보는 것은
+ * "누르는 동안만 캡처하는가" 하나뿐이다.
+ *
+ *   핸즈프리   ready 뒤에 캡처를 시작해 계속 흘려보낸다. 발화 경계는 서버 VAD 가 잡는다
+ *   누르고 말하기  연결만 해두고, 버튼을 **누르는 동안만** 캡처한다. 떼면 캡처를 멈추고
+ *              `control/flush` 를 보내 서버가 그 자리에서 세그먼트를 확정하게 한다
+ *              (`streaming.py` 의 `_drain_vad(force=True)`). 누르지 않는 동안에는 프레임이
+ *              하나도 나가지 않으므로 배경 소음이 VAD·STT 에 닿지 않는다
+ *
+ * 세션 `mode` 와는 다른 축이다 — 그쪽은 서버가 어느 엔진·경로를 쓰는지이고 설정 화면이
+ * 이미 보낸다. 이 화면은 마이크를 어떻게 다루는지만 정한다.
+ *
  * **숫자가 없다.** 샘플레이트·채널·프레임 길이·WS 경로·언어는 전부 `/v1/config` 에서 온다.
  * 화면에 남은 상수는 레벨 미터와 이력 길이 — 프로토콜과 무관한 표시 전용이다.
  *
@@ -17,8 +30,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   PermissionsAndroid,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -38,7 +53,8 @@ import type {
   WebSocketLike,
 } from '../src/api';
 import { Button } from './Button';
-import { streamConfig } from './settings';
+import { holdsToTalk } from './inputMode';
+import { chosenInputMode, streamConfig } from './settings';
 import type { Settings } from './settings';
 import { ui } from './theme';
 import type { Palette } from './theme';
@@ -168,6 +184,12 @@ export function LiveScreen({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [level, setLevel] = useState(0);
   const [frames, setFrames] = useState(0);
+  /** 세션을 연 입력 방식의 이름. 서버가 준 이름 그대로 화면에 띄운다. */
+  const [inputMode, setInputMode] = useState('');
+  /** 그 방식이 "누르는 동안만 캡처"인가. 이 값 하나로 화면과 캡처가 갈린다. */
+  const [holdToTalk, setHoldToTalk] = useState(false);
+  /** 지금 버튼을 누르고 있는가 (표시용). 판단은 `pressingRef` 로 한다. */
+  const [pressing, setPressing] = useState(false);
 
   const sessionRef = useRef<StreamSession | null>(null);
   const captureRef = useRef<MicCapture | null>(null);
@@ -175,6 +197,16 @@ export function LiveScreen({
   const playingRef = useRef(false);
   const frameCountRef = useRef(0);
   const levelAtRef = useRef(0);
+  /**
+   * 프레임을 보내도 되는가.
+   *
+   * 누르고 말하기의 안전장치다. 캡처를 멈춰도 네이티브가 이미 올려보낸 버퍼가 뒤늦게
+   * 도착할 수 있는데, 이 문이 닫혀 있으면 그것도 나가지 않는다. 핸즈프리에서는 캡처를
+   * 시작할 때 열어두고 끝까지 열려 있다.
+   */
+  const sendingRef = useRef(false);
+  /** 버튼을 누르고 있는가. 렌더를 기다리지 않는 판단은 전부 이 값으로 한다. */
+  const pressingRef = useRef(false);
 
   const addNotice = useCallback((message: string) => {
     setNotices(prev => (prev.includes(message) ? prev : [message, ...prev].slice(0, MAX_TURNS)));
@@ -199,6 +231,10 @@ export function LiveScreen({
   }, []);
 
   const teardown = useCallback(() => {
+    // 문을 먼저 닫는다. 아래에서 캡처를 멈추는 사이에 올라온 버퍼도 나가지 않게.
+    sendingRef.current = false;
+    pressingRef.current = false;
+    setPressing(false);
     if (captureRef.current) {
       captureRef.current.stop();
       captureRef.current = null;
@@ -213,6 +249,29 @@ export function LiveScreen({
     setLevel(0);
   }, []);
 
+  /**
+   * 버튼에서 손을 뗀 것과 같은 처리. 누르고 말하기에서만 의미가 있다.
+   *
+   * **`onPressOut` 하나에 기대지 않는다.** RN 의 `Pressability` 는 손가락이 버튼 밖으로
+   * 나가거나(LEAVE_PRESS_RECT) 스크롤이 응답자를 가져가면(RESPONDER_TERMINATED) 그때도
+   * `onPressOut` 을 부르지만, **언마운트로 사라질 때는 부르지 않는다**(`reset()` 이 설정을
+   * 얼려버린다). 그 두 자리를 따로 막아 뒀다 — 앱이 뒤로 넘어가면 아래 `AppState` 가
+   * 여기를 부르고, 화면이 사라지면 `teardown()` 이 마이크를 놓는다. 그러지 않으면 화면이
+   * 없는데 마이크가 계속 도는 사고가 난다.
+   */
+  const release = useCallback(() => {
+    if (!pressingRef.current) return;
+    pressingRef.current = false;
+    setPressing(false);
+
+    // 캡처가 실제로 시작됐을 때만 flush 한다. 시작도 못 한 채로 확정을 요구하지 않는다.
+    const wasSending = sendingRef.current;
+    sendingRef.current = false;
+    if (captureRef.current) captureRef.current.stop();
+    setLevel(0);
+    if (wasSending && sessionRef.current) sessionRef.current.flush();
+  }, []);
+
   // 화면을 떠나면 마이크와 스피커를 놓는다. 이것이 없으면 마이크가 계속 열려 있다.
   useEffect(
     () => () => {
@@ -222,6 +281,15 @@ export function LiveScreen({
     },
     [teardown],
   );
+
+  // 누른 채로 앱이 뒤로 넘어가면 `onPressOut` 이 오지 않는다. 그때도 손을 뗀 것으로 본다 —
+  // 화면이 안 보이는 동안 마이크가 도는 것이 이 방식에서 가장 나쁜 실패다.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') release();
+    });
+    return () => subscription.remove();
+  }, [release]);
 
   async function onConnect() {
     const client = makeClient();
@@ -259,6 +327,16 @@ export function LiveScreen({
   async function connect(client: ApiClient, config: ServerConfig) {
     // 다시 연결할 때 앞선 재생기의 AudioContext 가 남지 않게 먼저 닫는다.
     if (playerRef.current) playerRef.current.dispose();
+
+    // **입력 방식은 세션을 열 때 정해진다.** 설정 화면에서 고른 값을 방금 받은 응답 위에
+    // 얹은 것이라, 서버가 목록을 바꿔 고른 값이 더는 없으면 고를 수 있는 값으로 물러난다.
+    const modeName = chosenInputMode(config, form);
+    const hold = holdsToTalk(modeName);
+    setInputMode(modeName);
+    setHoldToTalk(hold);
+    pressingRef.current = false;
+    setPressing(false);
+    sendingRef.current = false;
 
     const player = new TtsPlayer({
       onPlayingChange: playing => {
@@ -372,6 +450,8 @@ export function LiveScreen({
       },
       {
         onFrame: frame => {
+          // 누르고 말하기에서 버튼을 뗀 뒤 뒤늦게 올라온 버퍼는 여기서 멈춘다.
+          if (!sendingRef.current) return;
           session.sendAudio(frame);
           frameCountRef.current += 1;
           const now = Date.now();
@@ -385,8 +465,47 @@ export function LiveScreen({
       },
     );
     captureRef.current = capture;
-    await capture.start();
+
+    // 여기가 두 방식이 갈리는 유일한 자리다. 누르고 말하기는 마이크를 열지 않은 채로 산다 —
+    // 버튼을 누를 때 `press()` 가 연다.
+    if (!hold) {
+      await capture.start();
+      sendingRef.current = true;
+    }
     setPhase('live');
+  }
+
+  /**
+   * 버튼을 눌렀다. 마이크를 열고, 열린 뒤에야 프레임을 내보낸다.
+   *
+   * `start()` 는 비동기라 **여는 사이에 손을 뗄 수 있다.** 그때는 열자마자 닫고 문을 열지
+   * 않는다 — 그래서 짧게 눌렀다 뗀 오터치에서도 프레임이 새지 않고, 캡처가 시작도 못 한
+   * 상태에서 flush 가 나가지도 않는다.
+   */
+  async function press() {
+    if (phase !== 'live' || !holdToTalk) return;
+    if (pressingRef.current) return; // 손가락이 나갔다 들어오면 onPressIn 이 다시 온다
+    pressingRef.current = true;
+    setPressing(true);
+
+    const capture = captureRef.current;
+    if (!capture) return;
+    try {
+      await capture.start();
+    } catch (err) {
+      // 문장은 라이브러리가 준 것을 그대로 나른다 (`MicCapture` 가 그렇게 던진다).
+      setError(errorText(err));
+      pressingRef.current = false;
+      setPressing(false);
+      capture.stop();
+      return;
+    }
+    if (!pressingRef.current) {
+      // 여는 사이에 이미 뗐다. 문은 한 번도 열리지 않았으므로 flush 도 하지 않는다.
+      capture.stop();
+      return;
+    }
+    sendingRef.current = true;
   }
 
   function onStt(event: SttEvent, partial: boolean) {
@@ -419,6 +538,17 @@ export function LiveScreen({
 
   const busy = phase === 'permission' || phase === 'connecting';
 
+  /**
+   * 상태 한 줄. 누르고 말하기에서 대기 중일 때는 "말해 보세요"가 거짓이 된다 —
+   * 버튼을 눌러야 마이크가 열리므로 그 사실을 그대로 쓴다.
+   */
+  const stateLabel =
+    holdToTalk && live === 'listening'
+      ? pressing
+        ? '듣는 중'
+        : '대기 중 — 버튼을 누르고 말하세요'
+      : LIVE_LABEL[live];
+
   return (
     <View>
       <Text style={[ui.sub, { color: colors.dim }]}>
@@ -442,12 +572,52 @@ export function LiveScreen({
         </View>
       )}
 
+      {/*
+        누르고 말하기의 버튼. 연결돼 있을 때만 나온다.
+
+        `onPressIn`/`onPressOut` 이 누름/뗌이다. 손가락이 버튼 밖으로 미끄러지거나 스크롤이
+        터치를 가져가도 `onPressOut` 은 오지만(RN 의 `Pressability`), 언마운트에서는 오지
+        않는다 — 그쪽은 `release()` 의 주석대로 화면 정리에서 막는다.
+      */}
+      {phase === 'live' && holdToTalk && (
+        <Pressable
+          testID="ptt"
+          onPressIn={press}
+          onPressOut={release}
+          style={({ pressed }) => [
+            styles.ptt,
+            {
+              backgroundColor: pressing ? colors.good : colors.accent,
+              borderColor: pressing ? colors.good : colors.border,
+              opacity: pressed || pressing ? 1 : 0.9,
+            },
+          ]}>
+          <Text style={styles.pttLabel}>
+            {pressing ? '듣는 중 — 손을 떼면 번역한다' : '누르고 말하기'}
+          </Text>
+          <Text style={styles.pttHint}>
+            {pressing
+              ? '떼는 순간 지금까지 들은 것을 한 세그먼트로 확정한다'
+              : '누르고 있는 동안에만 마이크가 열린다'}
+          </Text>
+        </Pressable>
+      )}
+
       {phase === 'live' && (
         <View style={[ui.box, { borderColor: colors.border, backgroundColor: colors.field }]}>
           <Text style={[ui.boxTitle, { color: colors.dim }]}>상태</Text>
           <Text style={[styles.state, { color: live === 'speaking' ? colors.good : colors.fg }]}>
-            {LIVE_LABEL[live]}
+            {stateLabel}
           </Text>
+          {/*
+            어떤 입력 방식으로 열렸고 지금 버튼이 어떤 상태인지. 이름은 서버가 준 것 그대로다.
+            핸즈프리에서도 방식 이름은 보여준다 — 왜 계속 듣고 있는지가 화면에 있어야 한다.
+          */}
+          {inputMode !== '' && (
+            <Text style={[ui.mono, { color: colors.dim }]}>
+              {`입력 방식 ${inputMode}${holdToTalk ? (pressing ? ' · 누르는 중' : ' · 대기 (버튼을 누르고 말한다)') : ' · 연속 캡처'}`}
+            </Text>
+          )}
           {/* 마이크가 실제로 듣고 있는지, 프레임이 실제로 나가고 있는지. */}
           <View style={[styles.meter, { backgroundColor: colors.border }]}>
             <View
@@ -534,6 +704,17 @@ export function LiveScreen({
 
 const styles = StyleSheet.create({
   state: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
+  /** 손가락으로 눌러야 하는 버튼이라 크게 둔다. 누르는 동안 색이 바뀐다. */
+  ptt: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 26,
+    alignItems: 'center',
+    gap: 6,
+  },
+  pttLabel: { color: '#ffffff', fontSize: 17, fontWeight: '700' },
+  pttHint: { color: '#ffffff', fontSize: 12, opacity: 0.85 },
   meter: { height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 8 },
   meterFill: { height: 6 },
   source: { fontSize: 16, lineHeight: 23, marginTop: 2 },

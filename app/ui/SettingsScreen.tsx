@@ -215,7 +215,8 @@ function Field({
 
       {field.transient && (
         <Text style={[styles.note, { color: colors.dim }]}>
-          화면 전용 — 서버로 나가지 않는다. 실시간 화면은 아직 이 값을 보지 않는다.
+          화면 전용 — 서버로 나가지 않는다. 앱이 마이크를 어떻게 다루는지를 정한다
+          (실시간 화면이 다음에 여는 세션부터 따른다).
         </Text>
       )}
 

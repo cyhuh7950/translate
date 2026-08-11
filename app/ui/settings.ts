@@ -17,6 +17,7 @@
  */
 
 import type { ServerConfig, StreamConfigMessage } from '../src/api';
+import { implemented } from './inputMode';
 
 /* ---- 사용자가 고른 것 -------------------------------------------------------- */
 
@@ -144,12 +145,17 @@ export function buildFields(config: ServerConfig, form: Settings): SettingField[
 
   // ── 입력 방식 ──────────────────────────────────────────────
   // 화면 전용이다. 서버는 이런 키를 읽지 않는다 (웹에서도 transient 로 둔다).
+  // **실시간 화면이 이 값을 따른다** — 누르고 말하기면 버튼을 누르는 동안만 캡처한다.
+  //
+  // 목록·순서·기본값은 서버가 주지만, 앱에 구현이 없는 이름은 걸러낸다. 고를 수는 있는데
+  // 고르면 아무 일도 안 하는 항목을 만들지 않기 위해서다 (웹의 `renderInputModes` 가
+  // `name in inputModes` 로 거르는 것과 같은 규칙이다). 구현 목록은 `ui/inputMode.ts` 에 있다.
   const client = config.client;
   if (client) {
     choice(
       'input_mode',
       '입력 방식',
-      (client.input_modes || []).map(m => option(m, m)),
+      (client.input_modes || []).filter(implemented).map(m => option(m, m)),
       client.default_input_mode,
       true,
     );
@@ -230,6 +236,18 @@ export function resolvedSettings(config: ServerConfig, form: Settings): Settings
     if (value !== '') values[field.name] = value;
   }
   return values;
+}
+
+/**
+ * 지금 고른 입력 방식. 서버로 나가지 않는 값이라 `resolvedSettings()` 에는 없다.
+ *
+ * 고를 수 없는 값으로 물러나는 규칙(`settle`)을 그대로 타므로, 서버가 목록을 바꿔 고른
+ * 값이 더는 없으면 첫 번째로 고를 수 있는 값이 나온다. 항목 자체가 없으면(응답에 `client`
+ * 절이 없거나 앱에 구현이 하나도 없으면) 빈 문자열이고, 그때는 연속 캡처가 유지된다.
+ */
+export function chosenInputMode(config: ServerConfig, form: Settings): string {
+  const field = buildFields(config, form).find(f => f.name === 'input_mode');
+  return field ? field.value : '';
 }
 
 /** 지금 고른 번역 언어. 아직 고른 것이 없으면 서버의 세션 기본값이다. */

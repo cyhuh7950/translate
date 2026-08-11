@@ -22,6 +22,7 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 
 import App from '../App';
+import { frameBytes, frameSamples } from '../src/api';
 import type { ServerConfig } from '../src/api';
 import { ConnectScreen } from '../ui/ConnectScreen';
 import { LiveScreen } from '../ui/LiveScreen';
@@ -173,7 +174,10 @@ function fakeConfig(): ServerConfig {
       enrolled: 0,
       store_error: null,
     },
-    client: { input_modes: ['tap', 'auto'], default_input_mode: 'tap' },
+    // 입력 방식만은 **실제 구현 이름**을 쓴다. 언어·프로필과 달리 이것은 서버가 주는
+    // 목록이면서 동시에 앱이 구현을 갖고 있어야 하는 이름이기 때문이다(웹도 같다).
+    // 'nope' 는 구현이 없는 이름 — 목록에 있어도 화면에 나오면 안 된다.
+    client: { input_modes: ['ptt', 'handsfree', 'nope'], default_input_mode: 'ptt' },
     stream: { path: '/v1/stream', input_format: 'pcm16', client_frame_ms: 20 },
   };
 }
@@ -469,5 +473,325 @@ describe('설정 화면 → 세션 (배선)', () => {
       }
       (globalThis as Record<string, unknown>).WebSocket = realSocket;
     }
+  });
+});
+
+/* ---- 입력 방식 (누르고 말하기) ---------------------------------------------- */
+
+/**
+ * 여기부터는 **소켓으로 실제로 나가는 것**을 읽는다. 화면이 그려지는지가 아니라,
+ * 버튼을 누르지 않은 동안 오디오가 한 프레임도 나가지 않는지를 본다 — 그것이 이 입력
+ * 방식의 존재 이유(배경 소음을 VAD·STT 에 닿지 않게 한다)이기 때문이다.
+ *
+ * 마이크는 네이티브라 여기서 열리지 않는다. jest 가 바꿔 끼운 목의 `onAudioReady` 를
+ * 가로채 **라이브러리가 버퍼를 올려준 것과 같은 처리**를 손으로 일으킨다. 그래서 이
+ * 테스트가 잡는 것은 캡처 시작/중지와 프레임 전송의 배선이고, 마이크가 실제로 열리는지는
+ * 여전히 실기기에서만 드러난다.
+ */
+
+/** 소켓으로 나간 것. 문자 메시지와 오디오 프레임을 따로 센다. */
+interface Wire {
+  text: string[];
+  /** 프레임마다 바이트 수. 비어 있으면 오디오가 하나도 안 나갔다는 뜻이다. */
+  audio: number[];
+}
+
+/** 서버가 config 를 받고 답하는 ready. 이것이 와야 앱이 마이크를 연다. */
+function readyEvent(config: ServerConfig) {
+  return {
+    type: 'ready',
+    session_id: 'test-session',
+    participants: [],
+    profile: config.session.default_profile,
+    mode: config.session.default_mode,
+    turn_policy: config.turn.default_policy,
+    audio: {
+      sample_rate: config.audio.stt_sample_rate,
+      channels: config.audio.stt_channels,
+      format: config.stream.input_format,
+      frame_ms: config.stream.client_frame_ms,
+    },
+    vad: { backend: config.vad.backend },
+  };
+}
+
+/** 전역 WebSocket 을 가짜로 바꿔 끼운다. `restore()` 를 반드시 부를 것. */
+function tapSocket(config: ServerConfig): { wire: Wire; restore: () => void } {
+  const wire: Wire = { text: [], audio: [] };
+
+  class FakeSocket {
+    binaryType = '';
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror: unknown = null;
+    onclose: ((event: unknown) => void) | null = null;
+
+    constructor() {
+      // 생성자에서 바로 부르면 openStream 이 아직 onopen 을 걸기 전이다.
+      setTimeout(() => {
+        if (this.onopen) this.onopen();
+      }, 0);
+    }
+
+    send(data: unknown) {
+      if (typeof data !== 'string') {
+        wire.audio.push((data as ArrayBuffer).byteLength);
+        return;
+      }
+      wire.text.push(data);
+      if (JSON.parse(data).type === 'config') this.emit(readyEvent(config));
+    }
+
+    emit(event: object) {
+      setTimeout(() => {
+        if (this.onmessage) this.onmessage({ data: JSON.stringify(event) });
+      }, 0);
+    }
+
+    close() {
+      if (this.onclose) this.onclose({ code: 1000, reason: '' });
+    }
+  }
+
+  const real = (globalThis as Record<string, unknown>).WebSocket;
+  (globalThis as Record<string, unknown>).WebSocket = FakeSocket;
+  return {
+    wire,
+    restore: () => {
+      (globalThis as Record<string, unknown>).WebSocket = real;
+    },
+  };
+}
+
+/** 마이크 목을 가로챈다 — 캡처가 몇 번 열렸는지 세고, 버퍼를 손으로 올려보낸다. */
+function tapMic(config: ServerConfig) {
+  const api = require('react-native-audio-api');
+  const original = api.AudioRecorder.prototype.onAudioReady;
+  const callbacks: ((event: { buffer: unknown }) => void)[] = [];
+
+  api.AudioRecorder.prototype.onAudioReady = function patched(
+    this: unknown,
+    options: unknown,
+    callback: (event: { buffer: unknown }) => void,
+  ) {
+    callbacks.push(callback);
+    return original.call(this, options, callback);
+  };
+
+  return {
+    /** 캡처가 열린 횟수. 0 이면 마이크를 아예 열지 않았다는 뜻이다. */
+    get opened() {
+      return callbacks.length;
+    },
+    /** 라이브러리가 20ms 버퍼 하나를 올려준 것과 같은 처리. 규격은 응답에서 온다. */
+    speak() {
+      const callback = callbacks[callbacks.length - 1];
+      if (!callback) throw new Error('마이크가 열리지 않았다');
+      callback({
+        buffer: {
+          sampleRate: config.audio.stt_sample_rate,
+          numberOfChannels: config.audio.stt_channels,
+          getChannelData: () => new Float32Array(frameSamples(config)),
+        },
+      });
+    },
+    restore: () => {
+      api.AudioRecorder.prototype.onAudioReady = original;
+    },
+  };
+}
+
+/** 서버에 붙지 않는 클라이언트. `/v1/config` 는 가짜 응답을 그대로 돌려준다. */
+function fakeClient(config: ServerConfig) {
+  return {
+    baseUrl: 'http://server.test',
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify(config),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }),
+  };
+}
+
+/** 타이머로 오가는 것들(소켓 열림·ready·마이크 시작)이 다 지나가게 둔다. */
+function settled(): Promise<void> {
+  return new Promise<void>(resolve => setTimeout(() => resolve(), 20));
+}
+
+describe('입력 방식이 실시간 화면에 실제로 적용된다', () => {
+  /** 통역 시작까지 눌러 세션을 연 화면. 정리는 호출자가 `done()` 으로 한다. */
+  async function live(config: ServerConfig, form: Settings) {
+    const socket = tapSocket(config);
+    const mic = tapMic(config);
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+
+    await ReactTestRenderer.act(() => {
+      tree = ReactTestRenderer.create(
+        <LiveScreen {...common} makeClient={() => fakeClient(config)} form={form} />,
+      );
+    });
+
+    const button = (label: string) =>
+      tree!.root.findAll(
+        node => node.props?.label === label && typeof node.props?.onPress === 'function',
+      )[0];
+
+    await ReactTestRenderer.act(async () => {
+      button('통역 시작')!.props.onPress();
+      await settled();
+    });
+
+    return {
+      wire: socket.wire,
+      mic,
+      /** 마이크가 버퍼를 올린 것과 같은 처리. 상태 갱신이 있으므로 act 안에서 돈다. */
+      speak: async (times = 1) => {
+        await ReactTestRenderer.act(() => {
+          for (let i = 0; i < times; i += 1) mic.speak();
+        });
+      },
+      /** 누르고 말하기 버튼. 핸즈프리면 없다. */
+      ptt: () => tree!.root.findAll(node => node.props?.testID === 'ptt')[0],
+      /** 화면에 실제로 떠 있는 글자들. */
+      texts: () =>
+        tree!.root
+          .findAll(node => typeof node.props?.children === 'string')
+          .map(node => String(node.props.children)),
+      press: async () => {
+        await ReactTestRenderer.act(async () => {
+          tree!.root.findAll(node => node.props?.testID === 'ptt')[0]!.props.onPressIn();
+          await settled();
+        });
+      },
+      releaseButton: async () => {
+        await ReactTestRenderer.act(async () => {
+          tree!.root.findAll(node => node.props?.testID === 'ptt')[0]!.props.onPressOut();
+          await settled();
+        });
+      },
+      done: async () => {
+        if (tree) {
+          await ReactTestRenderer.act(() => {
+            tree!.unmount();
+          });
+        }
+        mic.restore();
+        socket.restore();
+      },
+    };
+  }
+
+  /** 소켓으로 나간 control 메시지들. */
+  const controls = (wire: Wire) =>
+    wire.text.map(raw => JSON.parse(raw)).filter(m => m.type === 'control');
+
+  it('누르고 말하기 — 누르지 않으면 오디오가 한 프레임도 나가지 않는다', async () => {
+    const config = fakeConfig();
+    const screen = await live(config, { input_mode: 'ptt' });
+    try {
+      // 세션은 열렸다 — 첫 메시지는 config 다.
+      expect(JSON.parse(screen.wire.text[0] as string).type).toBe('config');
+      // 그런데 마이크는 아예 열리지 않았다. 이것이 소음을 막는 지점이다.
+      expect(screen.mic.opened).toBe(0);
+      expect(screen.wire.audio).toEqual([]);
+      // 버튼은 떠 있다.
+      expect(screen.ptt()).toBeDefined();
+    } finally {
+      await screen.done();
+    }
+  });
+
+  it('누르고 말하기 — 누르면 프레임이 나가고 떼면 control/flush 가 나간다', async () => {
+    const config = fakeConfig();
+    const screen = await live(config, { input_mode: 'ptt' });
+    try {
+      await screen.press();
+      expect(screen.mic.opened).toBe(1);
+
+      await screen.speak();
+      // 프레임 규격은 응답에서 온 것이다 (16kHz · 20ms · mono → 640 바이트).
+      expect(screen.wire.audio).toEqual([frameBytes(config)]);
+      // 아직 떼지 않았으니 확정은 없다.
+      expect(controls(screen.wire)).toEqual([]);
+
+      await screen.releaseButton();
+      // 뗐다 — 서버가 그 자리에서 세그먼트를 확정하게 한다.
+      expect(controls(screen.wire)).toEqual([{ type: 'control', action: 'flush' }]);
+
+      // 뗀 뒤에 뒤늦게 올라온 버퍼는 나가지 않는다.
+      await screen.speak();
+      expect(screen.wire.audio).toEqual([frameBytes(config)]);
+    } finally {
+      await screen.done();
+    }
+  });
+
+  it('누르고 말하기 — 시작하기도 전에 뗀 오터치는 flush 를 보내지 않는다', async () => {
+    const config = fakeConfig();
+    const screen = await live(config, { input_mode: 'ptt' });
+    try {
+      // 캡처를 여는 사이(비동기)에 손을 뗀다.
+      await ReactTestRenderer.act(async () => {
+        screen.ptt()!.props.onPressIn();
+        screen.ptt()!.props.onPressOut();
+        await settled();
+      });
+
+      expect(controls(screen.wire)).toEqual([]);
+      expect(screen.wire.audio).toEqual([]);
+
+      // 문이 닫혀 있으므로 뒤늦게 올라온 버퍼도 나가지 않는다.
+      await screen.speak();
+      expect(screen.wire.audio).toEqual([]);
+    } finally {
+      await screen.done();
+    }
+  });
+
+  it('핸즈프리 — 연결하자마자 캡처하고 flush 를 보내지 않는다 (회귀 방지)', async () => {
+    const config = fakeConfig();
+    const screen = await live(config, { input_mode: 'handsfree' });
+    try {
+      expect(screen.mic.opened).toBe(1);
+      // 누를 버튼이 없다 — 이 방식은 버튼을 쥐고 있을 필요가 없다는 것이 요점이다.
+      expect(screen.ptt()).toBeUndefined();
+
+      await screen.speak(2);
+      expect(screen.wire.audio).toEqual([frameBytes(config), frameBytes(config)]);
+      // 경계는 서버 VAD 가 잡는다. 앱이 확정을 요구하지 않는다.
+      expect(controls(screen.wire)).toEqual([]);
+    } finally {
+      await screen.done();
+    }
+  });
+
+  it('누르고 말하기 — 버튼 상태가 화면에 보인다', async () => {
+    const config = fakeConfig();
+    const screen = await live(config, { input_mode: 'ptt' });
+    try {
+      // 입력 방식 이름은 서버가 준 것 그대로 뜬다.
+      expect(screen.texts().join('\n')).toContain('입력 방식 ptt');
+      expect(screen.texts()).toContain('누르고 말하기');
+      // 이 방식에서는 "말해 보세요"가 거짓이다 — 버튼을 눌러야 마이크가 열린다.
+      expect(screen.texts()).toContain('대기 중 — 버튼을 누르고 말하세요');
+      expect(screen.texts()).not.toContain('대기 중 — 말해 보세요');
+
+      await screen.press();
+      expect(screen.texts()).toContain('듣는 중 — 손을 떼면 번역한다');
+
+      await screen.releaseButton();
+      expect(screen.texts()).toContain('누르고 말하기');
+    } finally {
+      await screen.done();
+    }
+  });
+
+  it('구현이 없는 이름은 고를 수 있게 만들지 않는다', async () => {
+    // 서버 목록에 'nope' 가 있어도 화면에는 나오지 않는다 — 고르면 아무 일도 안 하는
+    // 항목을 만들지 않기 위해서다 (웹의 renderInputModes 와 같은 규칙).
+    const values = field(fakeConfig(), {}, 'input_mode').options.map(o => o.value);
+    expect(values).toEqual(['ptt', 'handsfree']);
   });
 });
