@@ -23,7 +23,7 @@ import ReactTestRenderer from 'react-test-renderer';
 
 import App from '../App';
 import { frameBytes, frameSamples } from '../src/api';
-import type { ServerConfig } from '../src/api';
+import type { ModelsResponse, ServerConfig } from '../src/api';
 import { ConnectScreen } from '../ui/ConnectScreen';
 import { LiveScreen } from '../ui/LiveScreen';
 import { SettingsScreen } from '../ui/SettingsScreen';
@@ -793,5 +793,95 @@ describe('입력 방식이 실시간 화면에 실제로 적용된다', () => {
     // 항목을 만들지 않기 위해서다 (웹의 renderInputModes 와 같은 규칙).
     const values = field(fakeConfig(), {}, 'input_mode').options.map(o => o.value);
     expect(values).toEqual(['ptt', 'handsfree']);
+  });
+});
+
+/* ---- LLM 모델 선택 ------------------------------------------------------------
+ *
+ * 이 묶음이 있는 이유는 실제 사고 때문이다. `providers.yaml` 에 모델 이름이 박혀 있었는데
+ * Groq 이 그 모델을 없애 404 가 돌아왔고, 앱의 번역이 통째로 멈췄다. 그래서 목록을
+ * `GET /v1/models` 로 받아 고르게 했다 — 여기서 지키는 것은 두 가지다.
+ *
+ *   1. 목록을 못 받아도 **막히지 않는다** (자유 입력으로 남고 서버 기본 모델이 쓰인다)
+ *   2. 고른 모델이 **세션 메시지까지 간다**
+ */
+
+/** `GET /v1/models` 가 줄 법한 응답. 프로바이더 이름은 fakeConfig 와 맞춘다. */
+function fakeModels(): ModelsResponse {
+  return {
+    locale: 'ko',
+    cache_ttl_s: 900,
+    default_provider: 'alpha',
+    providers: [
+      {
+        id: 'alpha',
+        label: '알파',
+        default_model: 'alpha-big',
+        models: ['alpha-big', 'alpha-small'],
+        ok: true,
+        reason: null,
+        error: null,
+        age_s: 0,
+      },
+      {
+        id: 'beta',
+        label: '베타',
+        default_model: null,
+        models: [],
+        ok: false,
+        reason: '베타 의 모델 목록을 받지 못했습니다: 키가 없다',
+        error: 'llm.models_failed',
+        age_s: null,
+      },
+    ],
+  };
+}
+
+describe('LLM 모델', () => {
+  it('목록이 없으면 자유 입력으로 남는다 — 막지 않는다', () => {
+    const f = field(fakeConfig(), {}, 'model');
+    expect(f.kind).toBe('text');
+    expect(f.placeholder).toContain('alpha-big');
+  });
+
+  it('목록이 있으면 고르는 항목이 된다', () => {
+    const fields = buildFields(fakeConfig(), {}, fakeModels());
+    const f = fields.find(x => x.name === 'model')!;
+    expect(f.kind).toBe('choice');
+    expect(f.options.map(o => o.value)).toEqual(['', 'alpha-big', 'alpha-small']);
+    expect(f.value).toBe('');
+  });
+
+  it('쓸 수 있는 프로바이더라도 목록 조회만 실패했으면 이유를 보여주고 자유 입력으로 남는다', () => {
+    // 프로바이더는 멀쩡한데(available: true) 목록 조회만 실패한 경우다. 못 쓰게 된 것이
+    // 아니므로 막지 않고, 서버가 준 이유를 자리표시로 보여준다.
+    const models = fakeModels();
+    models.providers[0] = {
+      ...models.providers[0]!,
+      models: [],
+      ok: false,
+      reason: '알파 의 모델 목록을 받지 못했습니다: 시간이 초과됐다',
+      error: 'llm.models_failed',
+      age_s: null,
+    };
+    const fields = buildFields(fakeConfig(), {}, models);
+    const f = fields.find(x => x.name === 'model')!;
+    expect(f.kind).toBe('text');
+    expect(f.placeholder).toContain('시간이 초과됐다');
+  });
+
+  it('고른 모델이 세션 메시지에 실린다', () => {
+    const message = streamConfig(fakeConfig(), { model: 'alpha-small' }, 'ko', fakeModels()) as unknown as Record<string, unknown>;
+    expect(message.model).toBe('alpha-small');
+  });
+
+  it('없어진 모델을 들고 있으면 서버 기본값으로 물러난다 (404 재발 방지)', () => {
+    const message = streamConfig(fakeConfig(), { model: 'gone-model' }, 'ko', fakeModels()) as unknown as Record<string, unknown>;
+    expect(message.model).toBeUndefined();
+  });
+
+  it('목록을 모르면 고른 이름을 그대로 보낸다 (직접 적은 경우)', () => {
+    const message = streamConfig(fakeConfig(), { model: 'typed-by-hand' }, 'ko') as unknown as Record<string, unknown>;
+    expect(message.model).toBe('typed-by-hand');
   });
 });

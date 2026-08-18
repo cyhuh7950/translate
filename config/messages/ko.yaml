@@ -126,6 +126,12 @@ llm.no_model: >-
   providers.yaml 의 default_model 을 지정해 주세요
 llm.provider_failed: "{provider} 응답 오류 {status_code}"
 llm.provider_failed_detail: "{provider} 응답 오류 {status_code}: {body}"
+llm.models_unsupported: >-
+  프로바이더 '{provider}' 는 모델 목록을 알려주지 못합니다 — '{kind}' 계열 어댑터에
+  조회 구현이 없습니다. 모델 이름을 직접 적어 주세요
+llm.models_provider_unavailable: >-
+  '{provider}' 를 쓸 수 없어 모델 목록을 조회하지 않았습니다: {reason}
+llm.models_failed: "{provider} 의 모델 목록을 받지 못했습니다: {reason}"
 
 # ---- 음성 활동 감지 / 배경음 게이트 -----------------------------------------
 vad.failed: "음성 구간 판정에 실패했습니다 ({error}): {reason}"

@@ -177,6 +177,10 @@ def create_app() -> FastAPI:
         if interval > 0:
             tasks.append(asyncio.create_task(state.engines.poll_forever()))
         tasks.append(asyncio.create_task(_watch_config(state)))
+        # 모델 목록을 미리 받아 캐시를 채운다. **기다리지 않는다** — 기동이 프로바이더
+        # 9곳의 응답에 묶이면 안 된다. 실패는 목록 요청 때 사유로 나온다.
+        if cfg.get("llm.models_prefetch_on_start"):
+            tasks.append(asyncio.create_task(state.providers.prefetch_models()))
         try:
             for mod in modules:
                 await mod.startup()
@@ -402,15 +406,37 @@ def create_app() -> FastAPI:
 
     @app.get(
         "/v1/models",
-        summary="Models the provider actually offers",
+        summary="Models the providers actually offer",
         dependencies=[auth],
     )
-    async def list_models(provider: str | None = None) -> dict:
-        """Asks the provider directly instead of hardcoding model names in the code or client."""
-        pid = provider or state.config.get("llm.default_provider")
-        # LLMError 는 자기 코드와 상태(모르는 프로바이더 400 / 프로바이더 실패 502)를
-        # 들고 있다. 여기서 다시 상태를 정하지 않고 봉투 핸들러로 올린다.
-        return {"provider": pid, "models": await state.providers.models(pid)}
+    async def list_models(
+        request: Request,
+        provider: str | None = Query(
+            None, description="Only this provider. Omit to ask every configured provider"
+        ),
+        refresh: bool = Query(False, description="Ignore the cache and ask the providers again"),
+        locale: str | None = Query(None, description="Display language for failure reasons"),
+    ) -> dict:
+        """
+        Asks the providers directly instead of hardcoding model names in the code or client.
+
+        This is a **separate endpoint on purpose**: `/v1/config` is fetched on every app
+        start, and querying nine providers there would make every start that much slower.
+        Results are cached for `llm.models_cache_ttl_s`; providers are queried
+        concurrently, so one dead provider never blocks the others — it comes back with
+        its own `reason` instead.
+        """
+        state.reload_if_changed()
+        # 실패 사유의 표시 언어는 오류 봉투와 같은 규칙을 쓴다.
+        want_locale = request_locale(request)
+        # 모르는 프로바이더 이름이면 LLMError(400) 가 봉투 핸들러로 올라간다.
+        listings = await state.providers.catalog(provider, refresh=refresh)
+        return {
+            "locale": want_locale,
+            "cache_ttl_s": state.config.get("llm.models_cache_ttl_s"),
+            "default_provider": state.config.get("llm.default_provider"),
+            "providers": state.providers.models_view(listings, want_locale),
+        }
 
     # ---- 음성 등록 (voice print) --------------------------------------------
     #

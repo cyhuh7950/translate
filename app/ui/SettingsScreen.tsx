@@ -22,8 +22,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { fetchConfig } from '../src/api';
-import type { ApiClient, ServerConfig } from '../src/api';
+import { fetchConfig, fetchModels } from '../src/api';
+import type { ApiClient, ModelsResponse, ServerConfig } from '../src/api';
 import { Button } from './Button';
 import { buildFields, streamConfig } from './settings';
 import type { SettingField, Settings } from './settings';
@@ -37,6 +37,8 @@ export function SettingsScreen({
   errorText,
   config,
   onConfig,
+  models = null,
+  onModels = () => {},
   form,
   onForm,
 }: {
@@ -47,14 +49,22 @@ export function SettingsScreen({
   /** App 이 들고 있는 `/v1/config` 응답. 아직 받지 못했으면 null 이다. */
   config: ServerConfig | null;
   onConfig: (config: ServerConfig) => void;
+  /**
+   * App 이 들고 있는 `GET /v1/models` 결과. 아직 못 받았으면 null 이고, 그때 모델 항목은
+   * 자유 입력으로 남는다 — 목록이 없다고 고르지 못하게 막지는 않는다.
+   */
+  models?: ModelsResponse | null;
+  onModels?: (models: ModelsResponse) => void;
   /** 지금까지 고른 값. 비어 있으면 전부 서버 기본값이다. */
   form: Settings;
   onForm: (form: Settings) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // 모델 목록만 실패한 경우. 나머지 설정은 멀쩡하므로 오류를 따로 둔다.
+  const [modelError, setModelError] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     const client = makeClient();
     if (!client) {
       setError('서버 주소를 입력하세요.');
@@ -66,10 +76,20 @@ export function SettingsScreen({
       onConfig(await fetchConfig(client));
     } catch (err) {
       setError(errorText(err));
+      setBusy(false);
+      return;
+    }
+    // 모델 목록은 **따로** 받는다. 프로바이더 9곳에 물어보는 응답이라 config 보다 느리고,
+    // 실패해도 나머지 설정은 그대로 쓸 수 있어야 하기 때문이다. 여기서 실패하면 모델
+    // 항목만 자유 입력으로 남는다.
+    try {
+      onModels(await fetchModels(client, refresh));
+    } catch (err) {
+      setModelError(errorText(err));
     } finally {
       setBusy(false);
     }
-  }, [makeClient, onConfig, errorText]);
+  }, [makeClient, onConfig, onModels, errorText]);
 
   // 탭에 들어오면 한 번은 알아서 받아온다 — 고를 것이 없는 빈 화면을 먼저 보여주지 않기
   // 위해서다. 그다음부터는 사용자가 `다시 불러오기` 로 부른다 (주소를 바꿨을 때 등).
@@ -85,9 +105,9 @@ export function SettingsScreen({
     onForm({ ...form, [name]: value });
   }
 
-  const fields = config === null ? [] : buildFields(config, form);
+  const fields = config === null ? [] : buildFields(config, form, models);
   // 실제로 나갈 메시지. 화면과 세션이 어긋나지 않는지 여기서 바로 보인다.
-  const message = config === null ? null : streamConfig(config, form, locale);
+  const message = config === null ? null : streamConfig(config, form, locale, models);
 
   return (
     <View>
@@ -108,6 +128,19 @@ export function SettingsScreen({
         />
       </View>
 
+      {/*
+        서버가 모델 목록을 캐시하므로(기본 15분) 방금 프로바이더에 모델이 생겼다면 이것을
+        눌러야 보인다. 캐시를 무시하고 9곳에 다시 물어보므로 그만큼 느리다.
+      */}
+      <View style={ui.row}>
+        <Button
+          label="모델 목록 새로 고침"
+          onPress={() => load(true)}
+          disabled={busy || config === null}
+          colors={colors}
+        />
+      </View>
+
       {busy && (
         <View style={ui.busy}>
           <ActivityIndicator color={colors.accent} />
@@ -121,6 +154,22 @@ export function SettingsScreen({
           <Text style={[ui.boxTitle, { color: colors.bad }]}>오류</Text>
           <Text style={[ui.mono, { color: colors.fg }]} selectable>
             {error}
+          </Text>
+        </View>
+      )}
+
+      {/*
+        모델 목록만 못 받은 경우. 설정 자체는 멀쩡하므로 오류 상자를 따로 두고, 모델 항목은
+        자유 입력으로 남아 있다는 것을 함께 알린다 — 못 쓰게 된 것이 아니다.
+      */}
+      {modelError !== '' && (
+        <View style={[ui.box, { borderColor: colors.border }]}>
+          <Text style={[ui.boxTitle, { color: colors.dim }]}>모델 목록을 받지 못했다</Text>
+          <Text style={[ui.mono, { color: colors.fg }]} selectable>
+            {modelError}
+          </Text>
+          <Text style={[ui.sub, { color: colors.dim }]}>
+            모델은 직접 적을 수 있고, 비워 두면 서버가 정한 기본 모델이 쓰인다.
           </Text>
         </View>
       )}

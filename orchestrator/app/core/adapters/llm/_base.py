@@ -8,8 +8,12 @@ translator.py 가 하고, 어댑터는 "메시지를 보내고 토큰을 받아�
 그래서 새 프로바이더가 OpenAI 호환이면 providers.yaml 에 항목 하나 추가로 끝난다.
 
 계약:
-    models()  -> list[str]                 사용 가능한 모델 목록 (없으면 빈 리스트)
+    models()  -> list[str]                 프로바이더에 물어본 모델 목록
     chat(...) -> AsyncIterator[str]        토큰 델타를 순서대로. stream=False 면 한 번에 하나.
+
+`models()` 는 **선택 구현**이다. 채우지 않은 계열은 여기 기본 구현이 사유를 담아
+`llm.models_unsupported` 로 죽는다 — 빈 목록을 조용히 돌려주면 "이 프로바이더는 모델이
+없다"와 "이 계열은 조회를 못 한다"가 구별되지 않아 화면에 아무 이유도 못 띄운다.
 """
 
 from __future__ import annotations
@@ -72,6 +76,46 @@ class BaseLLM:
         total = float(self.settings.get("request_timeout_s"))
         return httpx.Timeout(total, connect=min(10.0, total))
 
+    def _models_timeout(self) -> httpx.Timeout:
+        """
+        목록 조회용 시간 제한. 번역용(`request_timeout_s`)과 따로다.
+
+        목록은 화면을 그리려고 부르는 것이라 번역만큼 기다릴 수 없다. 값은
+        `llm.models_timeout_s` 에서 온다 — 코드에 폴백을 두지 않는다.
+        """
+        total = float(self.settings.get("models_timeout_s"))
+        return httpx.Timeout(total, connect=min(10.0, total))
+
+    # ---- 프로바이더 고유 옵션 ----------------------------------------------
+    #
+    # 요청 본문을 고정으로 만들면 프로바이더마다 다른 값을 보낼 통로가 없다. 실제로
+    # 필요해졌다 — Groq 의 gpt-oss 는 추론 모델이라 `reasoning_effort` 를 낮추면
+    # 사고 토큰이 줄어 응답이 빨라진다. 그런 값은 계열의 공통 규격이 아니므로
+    # providers.yaml 의 프로바이더 항목(`options:`)에 적고 그대로 실어 보낸다.
+    #
+    # ★ 값은 설정에서만 온다. 이 파일에도, 어댑터에도 옵션 이름이 하나도 없다.
+
+    def request_options(self) -> dict:
+        """providers.yaml 의 `options:` 절. 없으면 빈 사전이다."""
+        options = self.spec.get("options")
+        return dict(options) if isinstance(options, dict) else {}
+
+    def merge_options(self, payload: dict) -> dict:
+        """
+        요청 본문에 프로바이더 고유 옵션을 얹는다. **설정이 이긴다.**
+
+        사전 값은 한 겹 병합한다 — Gemini 의 `generationConfig` 처럼 어댑터가 이미
+        만들어 둔 사전에 한 항목만 더하고 싶은 경우가 있어서다. 통째로 덮어쓰게 하면
+        temperature 같은 공통 설정이 조용히 사라진다.
+        """
+        for key, value in self.request_options().items():
+            current = payload.get(key)
+            if isinstance(current, dict) and isinstance(value, dict):
+                payload[key] = {**current, **value}
+            else:
+                payload[key] = value
+        return payload
+
     async def _raise_for_status(self, r: httpx.Response) -> None:
         if r.status_code < 400:
             return
@@ -104,7 +148,18 @@ class BaseLLM:
     # ---- 하위 클래스가 구현 -------------------------------------------------
 
     async def models(self) -> list[str]:
-        return []
+        """
+        프로바이더가 실제로 내주는 모델 이름들.
+
+        계열이 이 메서드를 채우지 않았으면 사유를 담아 죽는다. 목록 화면은 그 사유를
+        그대로 띄우고 자유 입력으로 남는다 — 고를 수 없다고 막지 않는다.
+        """
+        raise LLMError(
+            "llm.models_unsupported",
+            status=501,
+            provider=self.id,
+            kind=self.spec.get("kind", ""),
+        )
 
     async def chat(
         self,

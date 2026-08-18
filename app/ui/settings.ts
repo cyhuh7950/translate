@@ -16,7 +16,7 @@
  *     쓸 수 없는 프로필로 세션을 열어 서버에 거절당하는 일을 만들지 않기 위해서다.
  */
 
-import type { ServerConfig, StreamConfigMessage } from '../src/api';
+import type { ModelsResponse, ServerConfig, StreamConfigMessage } from '../src/api';
 import { implemented } from './inputMode';
 
 /* ---- 사용자가 고른 것 -------------------------------------------------------- */
@@ -85,7 +85,12 @@ function settle(options: SettingOption[], wanted: string): string {
  * 응답에 없거나(프로바이더가 없는 서버), 서버가 막아둔 것(`allow_*_override: false`)은
  * 아예 나타나지 않는다.
  */
-export function buildFields(config: ServerConfig, form: Settings): SettingField[] {
+export function buildFields(
+  config: ServerConfig,
+  form: Settings,
+  /** `GET /v1/models` 결과. 없으면 모델은 자유 입력으로 남는다. */
+  models: ModelsResponse | null = null,
+): SettingField[] {
   const fields: SettingField[] = [];
 
   const choice = (
@@ -203,20 +208,45 @@ export function buildFields(config: ServerConfig, form: Settings): SettingField[
       config.llm.default_provider,
     );
 
-    // 모델 **목록**은 응답에 없다 — 프로바이더가 알려주는 것은 `default_model` 하나뿐이다.
-    // 그래서 자유 입력으로 두고, 비워 뒀을 때 무엇이 쓰이는지만 자리표시로 보여준다.
+    // ── LLM 모델 ─────────────────────────────────────────────
+    // 목록은 `/v1/config` 에 없다. `GET /v1/models` 가 프로바이더에 직접 물어본 결과를
+    // 넘겨받아야 고를 수 있다 — 그 이유는 `src/api/models.ts` 에 적었다(요약하면,
+    // 이름을 박아두면 프로바이더가 목록을 바꿀 때 번역이 멈춘다).
+    //
+    // 목록을 못 받았으면(아직 안 불렀거나, 그 프로바이더 조회가 실패했거나) **막지 않고**
+    // 자유 입력으로 남긴다. 조회 실패가 곧 사용 불가는 아니다 — `default_model` 로는
+    // 여전히 번역이 돌아가고, 사용자가 이름을 알면 직접 적을 수도 있어야 한다.
     const providerField = fields.find(f => f.name === 'provider');
-    const picked = providers.find(p => p.id === (providerField ? providerField.value : ''));
+    const providerId = providerField ? providerField.value : '';
+    const picked = providers.find(p => p.id === providerId);
     const fallbackModel = picked ? picked.default_model : null;
-    fields.push({
-      name: 'model',
-      label: 'LLM 모델',
-      kind: 'text',
-      options: [],
-      value: chosen(form, 'model', ''),
-      transient: false,
-      placeholder: fallbackModel ? `비워 두면 ${fallbackModel}` : '비워 두면 서버가 정한다',
-    });
+    const listing = models ? models.providers.find(m => m.id === providerId) : undefined;
+    const names = listing ? listing.models : [];
+
+    if (names.length > 0) {
+      // 첫 항목은 "고르지 않음". 비워 두면 서버가 default_model 을 쓴다.
+      const auto = option(
+        AUTO,
+        '서버 기본값',
+        true,
+        fallbackModel ? `지금은 ${fallbackModel}` : '',
+      );
+      choice('model', 'LLM 모델', [auto, ...names.map(n => option(n, n))], AUTO);
+    } else {
+      fields.push({
+        name: 'model',
+        label: 'LLM 모델',
+        kind: 'text',
+        options: [],
+        value: chosen(form, 'model', ''),
+        transient: false,
+        placeholder: listing && !listing.ok && listing.reason
+          ? listing.reason // 서버가 로케일로 렌더한 문장 — 앱이 손대지 않는다
+          : fallbackModel
+            ? `비워 두면 ${fallbackModel}`
+            : '비워 두면 서버가 정한다',
+      });
+    }
   }
 
   return fields;
@@ -228,9 +258,16 @@ export function buildFields(config: ServerConfig, form: Settings): SettingField[
  * 서버로 나갈 값만 추린 것. 비어 있는 값은 빠진다 — 서버는 **없는 키에만** 자기 기본값을
  * 쓰므로, 빈 문자열을 보내면 기본값 대신 빈 값이 적용되는 자리가 생긴다.
  */
-export function resolvedSettings(config: ServerConfig, form: Settings): Settings {
+export function resolvedSettings(
+  config: ServerConfig,
+  form: Settings,
+  models: ModelsResponse | null = null,
+): Settings {
   const values: Settings = {};
-  for (const field of buildFields(config, form)) {
+  // 목록을 함께 넘기는 이유 — 목록이 있으면 모델 항목이 `choice` 가 되고, 고를 수 없는
+  // 값은 `settle()` 이 물러나게 한다. 목록 없이 부르면 사용자가 예전에 고른 이름이
+  // 그대로 나가서, 프로바이더가 그 모델을 없앤 뒤에도 404 를 다시 낸다.
+  for (const field of buildFields(config, form, models)) {
     if (field.transient) continue;
     const value = field.value.trim();
     if (value !== '') values[field.name] = value;
@@ -246,6 +283,7 @@ export function resolvedSettings(config: ServerConfig, form: Settings): Settings
  * 절이 없거나 앱에 구현이 하나도 없으면) 빈 문자열이고, 그때는 연속 캡처가 유지된다.
  */
 export function chosenInputMode(config: ServerConfig, form: Settings): string {
+  // 입력 방식은 모델 목록과 무관하므로 넘기지 않는다.
   const field = buildFields(config, form).find(f => f.name === 'input_mode');
   return field ? field.value : '';
 }
@@ -274,8 +312,9 @@ export function streamConfig(
   config: ServerConfig,
   form: Settings,
   locale: string,
+  models: ModelsResponse | null = null,
 ): StreamConfigMessage {
-  const values = resolvedSettings(config, form);
+  const values = resolvedSettings(config, form, models);
 
   const message: StreamConfigMessage = {
     type: 'config',

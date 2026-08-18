@@ -26,7 +26,14 @@ class OpenAICompatible(BaseLLM):
         return h
 
     async def models(self) -> list[str]:
-        async with httpx.AsyncClient(timeout=self._timeout()) as c:
+        """
+        `GET {base_url}/models` → `{"data": [{"id": ...}]}`.
+
+        7개 프로바이더가 모두 이 규격이다(실측: cerebras·groq·mistral·openrouter·
+        upstage·openai·ollama). 페이지네이션이 없는 규격이라 한 번에 다 온다 —
+        실측에서 openrouter 가 413개를 한 응답에 돌려줬다.
+        """
+        async with httpx.AsyncClient(timeout=self._models_timeout()) as c:
             r = await c.get(f"{self.base_url}/models", headers=self._headers())
             await self._raise_for_status(r)
             data = r.json().get("data", [])
@@ -47,6 +54,9 @@ class OpenAICompatible(BaseLLM):
             "max_tokens": int(self.settings.get("max_output_tokens")),
             "stream": stream,
         }
+        # 프로바이더 고유 옵션(providers.yaml 의 `options:`)을 그대로 얹는다.
+        # 예: Groq 의 gpt-oss 에 reasoning_effort 를 낮춰 사고 토큰을 줄인다.
+        self.merge_options(payload)
         url = f"{self.base_url}/chat/completions"
 
         async with httpx.AsyncClient(timeout=self._timeout()) as c:

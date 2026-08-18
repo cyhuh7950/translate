@@ -47,6 +47,7 @@ import type {
   ApiClient,
   LlmEvent,
   MetricsEvent,
+  ModelsResponse,
   ServerConfig,
   SttEvent,
   StreamSession,
@@ -161,6 +162,7 @@ export function LiveScreen({
   locale,
   errorText,
   form,
+  models = null,
   onConfig,
 }: {
   colors: Palette;
@@ -173,6 +175,12 @@ export function LiveScreen({
    * 없게 되면 `streamConfig()` 가 고를 수 있는 값으로 물러난다.
    */
   form: Settings;
+  /**
+   * `GET /v1/models` 결과. 고른 모델이 아직 그 프로바이더에 있는지 확인하는 데 쓴다 —
+   * 없으면 `streamConfig()` 가 서버 기본 모델로 물러난다. null 이면 확인 없이 고른 값을
+   * 그대로 보낸다(목록을 못 받았을 뿐 못 쓰게 된 것은 아니므로).
+   */
+  models?: ModelsResponse | null;
   /** 여기서 받아온 설정을 App 에 돌려준다 — 설정 화면이 같은 응답을 쓴다. */
   onConfig?: (config: ServerConfig) => void;
 }) {
@@ -356,7 +364,7 @@ export function LiveScreen({
 
     // **설정 화면에서 고른 값이 여기로 들어온다.** 고르지 않은 것은 서버 기본값이고,
     // 빈 값은 아예 넣지 않는다 — 서버는 없는 키에만 자기 기본값을 쓴다.
-    const message = streamConfig(config, form, locale);
+    const message = streamConfig(config, form, locale, models);
 
     // 인증 헤더는 여기서 붙인다. 브라우저와 달리 앱은 WS 핸드셰이크에 헤더를 실을 수 있다.
     const headers = authHeaders(client);

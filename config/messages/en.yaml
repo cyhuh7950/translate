@@ -136,6 +136,15 @@ llm.no_model: >-
   default_model in providers.yaml
 llm.provider_failed: "{provider} response error {status_code}"
 llm.provider_failed_detail: "{provider} response error {status_code}: {body}"
+# 모델 목록 조회. 실패해도 번역은 default_model 로 계속되므로 이 문구들은 "고를 수
+# 없다"가 아니라 "목록을 못 받았다"를 알린다.
+llm.models_unsupported: >-
+  Provider '{provider}' cannot list its models: no adapter of kind '{kind}' implements
+  it. Type the model name instead
+llm.models_provider_unavailable: >-
+  Models for '{provider}' were not requested because the provider is not usable:
+  {reason}
+llm.models_failed: "Could not list models from {provider}: {reason}"
 
 # ---- 음성 활동 감지 / 배경음 게이트 -----------------------------------------
 vad.failed: "Voice activity detection failed ({error}): {reason}"

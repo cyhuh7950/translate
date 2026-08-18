@@ -39,7 +39,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 
 import appConfig from './app.config.json';
 import { ApiError, StreamError } from './src/api';
-import type { ApiClient, FetchLike, ServerConfig } from './src/api';
+import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
 import { LiveScreen } from './ui/LiveScreen';
 import { SettingsScreen } from './ui/SettingsScreen';
@@ -112,6 +112,10 @@ function Root({ isDark }: { isDark: boolean }) {
    *   form    사용자가 고른 값. 비어 있으면 전부 서버 기본값이라는 뜻이다.
    */
   const [config, setConfig] = useState<ServerConfig | null>(null);
+  // `GET /v1/models` 결과. `/v1/config` 와 따로 받는다 — 프로바이더 9곳에 물어보는
+  // 응답이라 앱 시작 경로에 두면 그만큼 늦어진다. 설정 화면이 받아 여기 올려두면
+  // 실시간 화면도 같은 것을 본다(고른 모델이 세션에 실려야 하므로).
+  const [models, setModels] = useState<ModelsResponse | null>(null);
   const [form, setForm] = useState<Settings>({});
 
   /** 세 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
@@ -184,11 +188,15 @@ function Root({ isDark }: { isDark: boolean }) {
             {...shared}
             config={config}
             onConfig={setConfig}
+            models={models}
+            onModels={setModels}
             form={form}
             onForm={setForm}
           />
         )}
-        {tab === 'live' && <LiveScreen {...shared} onConfig={setConfig} form={form} />}
+        {tab === 'live' && (
+          <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />
+        )}
       </View>
     </ScrollView>
   );
