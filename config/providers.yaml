@@ -21,7 +21,18 @@ providers:
     kind: openai_compatible
     base_url: https://api.groq.com/openai/v1
     api_key_env: LLM_KEY_GROQ
-    default_model: llama-3.3-70b-versatile   # 빠르면서 품질이 무난. 더 빠른 것은 llama-3.1-8b-instant
+    # 2026-08 실측으로 고른 값. 이전에 쓰던 llama-3.3-70b-versatile 은 Groq 이 없애서
+    # 404(model_not_found)로 앱이 멈췄다 — **모델 이름을 설정에 박아두면 프로바이더가
+    # 목록을 바꿀 때마다 이렇게 멈춘다.** 목록을 런타임에 조회하도록 고치는 것이 맞다.
+    #
+    # 고른 근거 (한국어→영어, 문장 3개 평균):
+    #   gpt-oss-120b  0.36s  가장 자연스럽다 ("I'll get back in touch with you tomorrow")
+    #   gpt-oss-20b   0.49s  정확하지만 조금 딱딱하고, 레이트리밋에 더 빨리 걸렸다
+    #   qwen3.6-27b          사고 과정을 그대로 출력해 쓸 수 없다
+    #
+    # gpt-oss 는 추론 모델이라 완성 토큰의 절반 이상이 사고 토큰이다. llm.max_output_tokens
+    # 를 작게 잡으면 사고만 하다 답이 잘려 **빈 번역문**이 나온다(2048 이면 넉넉하다).
+    default_model: openai/gpt-oss-120b
     fast: true
 
   mistral:
