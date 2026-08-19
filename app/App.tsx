@@ -19,12 +19,16 @@
  *      fetch 가 **둘 다 그대로 대입되도록** 구조만 선언해 둔 타입이다.
  *   2. **주소를 박지 않는다** — 서버 주소·API 키·로케일은 app.config.json 에서 오고,
  *      비어 있으면 화면에서 입력받는다. 소스에는 없다.
+ *
+ *      **그 파일을 고칠 필요는 없다.** 한 번 입력하면 기기에 남아 다음부터 채워진다
+ *      (`storage.ts`). 추적되는 파일이라 실제 API 키를 적으면 커밋에 섞일 위험이
+ *      있었는데, 저장이 생기면서 그 이유가 없어졌다. 비워 둔 채로 두는 것을 권한다.
  *   3. **고른 설정을 들고 있는다** — 설정 화면이 고치고, 나머지 두 화면이 읽는다.
- *      화면을 오가도 값이 남아야 하기 때문에 여기에 둔다. 다만 **앱을 껐다 켜면 사라진다** —
- *      저장하려면 AsyncStorage(네이티브)가 필요해서 이번에는 넣지 않았다 (README §10).
+ *      화면을 오가도 값이 남아야 하기 때문에 여기에 둔다. 그리고 **앱을 껐다 켜도 남는다** —
+ *      시작할 때 한 번 읽고, 바뀔 때마다 남긴다 (아래 두 effect).
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -44,6 +48,7 @@ import { ConnectScreen } from './ui/ConnectScreen';
 import { LiveScreen } from './ui/LiveScreen';
 import { SettingsScreen } from './ui/SettingsScreen';
 import type { Settings } from './ui/settings';
+import * as storage from './storage';
 import { dark, light, ui } from './ui/theme';
 import type { Palette } from './ui/theme';
 
@@ -117,6 +122,40 @@ function Root({ isDark }: { isDark: boolean }) {
   // 실시간 화면도 같은 것을 본다(고른 모델이 세션에 실려야 하므로).
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [form, setForm] = useState<Settings>({});
+
+  /**
+   * 기기에 남겨둔 값을 한 번 읽어온다.
+   *
+   * 저장이 없던 동안 서버 주소를 앱을 켤 때마다 다시 입력해야 했다 — 고를 것이 많아진
+   * 지금은 더 거슬린다. 읽기가 끝날 때까지는 `app.config.json` 의 값으로 시작하고,
+   * 남긴 것이 있으면 그것으로 덮는다. **읽지 못해도 그냥 기본값으로 간다**
+   * (`storage.ts` 는 던지지 않는다).
+   */
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    storage.load().then(saved => {
+      if (!alive) return;
+      if (saved.serverUrl !== undefined) setBaseUrl(saved.serverUrl);
+      if (saved.apiKey !== undefined) setApiKey(saved.apiKey);
+      if (saved.form !== undefined) setForm(saved.form);
+      setRestored(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
+   * 바뀌면 남긴다.
+   *
+   * `restored` 를 기다리는 이유 — 읽기가 끝나기 전에 저장하면, 아직 기본값인 상태가
+   * 남긴 값을 덮어써 저장이 무의미해진다. 실제로 순서를 지키지 않으면 그렇게 된다.
+   */
+  useEffect(() => {
+    if (!restored) return;
+    storage.save({ serverUrl: baseUrl, apiKey, locale: LOCALE, form });
+  }, [restored, baseUrl, apiKey, form]);
 
   /** 세 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
   const makeClient = useCallback((): ApiClient | null => {
