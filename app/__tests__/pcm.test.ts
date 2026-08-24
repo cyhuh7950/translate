@@ -10,7 +10,10 @@
  */
 
 import {
+  bytesToBase64,
+  concatPcm16,
   decodeAudioChunk,
+  encodeWav,
   frameLevel,
   LinearResampler,
   PcmFramer,
@@ -145,6 +148,78 @@ describe('서버가 보낸 오디오 읽기', () => {
 
   test('헤더도 없고 sr 도 없으면 조용히 재생하지 않고 이유를 던진다', () => {
     expect(() => decodeAudioChunk(new Int16Array([1, 2]).buffer as ArrayBuffer, 0)).toThrow();
+  });
+});
+
+describe('WAV 쓰기 (화자 등록 클립 업로드용)', () => {
+  test('encode → decode 왕복하면 샘플이 그대로 보존된다', () => {
+    const samples = new Int16Array([0, 16384, -16384, 32767, -32768, 100, -1]);
+    const wav = encodeWav(samples, 16000, 1);
+    const decoded = decodeAudioChunk(wav, 0);
+
+    expect(decoded.container).toBe('wav');
+    expect(decoded.sampleRate).toBe(16000);
+    expect(decoded.channels).toBe(1);
+    // decodeAudioChunk 도 같은 공식(pcm16ToFloat32, /0x8000)으로 되돌리므로 정확히 같아야 한다.
+    expect(Array.from(decoded.samples)).toEqual(Array.from(pcm16ToFloat32(samples)));
+  });
+
+  test('스테레오로 인코딩해도 왕복된다 (기존 readWav 의 다운믹스를 그대로 탄다)', () => {
+    const samples = new Int16Array([32767, -32768, 0, 0]); // 2 프레임 · 2채널
+    const wav = encodeWav(samples, 44100, 2);
+    const decoded = decodeAudioChunk(wav, 0);
+
+    expect(decoded.sampleRate).toBe(44100);
+    expect(decoded.channels).toBe(2);
+    expect(decoded.samples).toHaveLength(2); // 다운믹스돼 프레임 수만 남는다
+    expect(decoded.samples[0]).toBeCloseTo(0, 3); // (1 + -1) / 2
+    expect(decoded.samples[1]).toBeCloseTo(0, 3);
+  });
+
+  test('표준 44바이트 헤더 — RIFF/WAVE/fmt/data 태그와 PCM16 필드가 맞다', () => {
+    const wav = encodeWav(new Int16Array([1, 2, 3]), 16000, 1);
+    expect(wav.byteLength).toBe(44 + 6);
+
+    const view = new DataView(wav);
+    const tag = (at: number) =>
+      String.fromCharCode(view.getUint8(at), view.getUint8(at + 1), view.getUint8(at + 2), view.getUint8(at + 3));
+
+    expect(tag(0)).toBe('RIFF');
+    expect(tag(8)).toBe('WAVE');
+    expect(tag(12)).toBe('fmt ');
+    expect(tag(36)).toBe('data');
+    expect(view.getUint16(20, true)).toBe(1); // PCM 정수
+    expect(view.getUint16(22, true)).toBe(1); // mono
+    expect(view.getUint32(24, true)).toBe(16000);
+    expect(view.getUint16(34, true)).toBe(16); // bits per sample
+    expect(view.getUint32(40, true)).toBe(6); // data 청크 길이(바이트)
+  });
+
+  test('concatPcm16 이 여러 프레임을 순서대로 이어붙인다 (버퍼를 공유하지 않는다)', () => {
+    const a = new Int16Array([1, 2]).buffer as ArrayBuffer;
+    const b = new Int16Array([3, 4, 5]).buffer as ArrayBuffer;
+    const out = concatPcm16([a, b]);
+    expect(Array.from(out)).toEqual([1, 2, 3, 4, 5]);
+
+    // 원본을 나중에 바꿔도 이어붙인 결과는 영향받지 않는다.
+    new Int16Array(a)[0] = 999;
+    expect(out[0]).toBe(1);
+  });
+});
+
+describe('base64 인코딩 (등록 클립을 data URI 로 올릴 때 쓴다)', () => {
+  // 기대값은 Node 의 Buffer.from(bytes).toString('base64') 로 미리 뽑아 둔 것이다.
+  // 이 파일은 tsconfig.json(RN 앱 코드) 소관이라 Node 타입(Buffer)이 없다 — audio/pcm.ts
+  // 가 RN 무의존인 것과 같은 이유로, 테스트도 Node 전역에 기대지 않는다.
+  test('표준 base64 결과와 같다 (경계값 포함 — 0 · 255 · 패딩 없는 3바이트 배수)', () => {
+    const bytes = new Uint8Array([0, 1, 2, 253, 254, 255, 65, 66, 67]);
+    expect(bytesToBase64(bytes)).toBe('AAEC/f7/QUJD');
+  });
+
+  test('길이가 3 의 배수가 아니어도 패딩(=)이 맞다', () => {
+    expect(bytesToBase64(new Uint8Array([65]))).toBe('QQ==');
+    expect(bytesToBase64(new Uint8Array([65, 66]))).toBe('QUI=');
+    expect(bytesToBase64(new Uint8Array([]))).toBe('');
   });
 });
 

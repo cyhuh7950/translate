@@ -8,5 +8,6 @@ export * from './types';
 export * from './http';
 export * from './config';
 export * from './models';
+export * from './speakers';
 export * from './stream';
 export * from './translate';

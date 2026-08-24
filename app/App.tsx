@@ -1,16 +1,18 @@
 /**
- * 앱의 뿌리 — 서버 주소와 **고른 설정**을 들고, 세 화면을 전환한다.
+ * 앱의 뿌리 — 서버 주소와 **고른 설정**을 들고, 네 화면을 전환한다.
  *
  *   연결 확인   `ui/ConnectScreen.tsx`  — RN → src/api → 서버 경로가 사는가 (스파이크)
  *   설정        `ui/SettingsScreen.tsx` — 통역할 언어·프로필·모드·엔진을 고른다
  *   실시간 통역 `ui/LiveScreen.tsx`     — 마이크 → WS → 원문 · 번역문 · 번역 음성
+ *   화자 등록   `ui/EnrollScreen.tsx`   — 자기 목소리를 등록해 다른 목소리를 걸러낸다
  *
  * **연결 확인 화면을 남겨둔 것은 의도다.** 실시간 경로가 안 될 때 "서버는 살아 있다"를
  * 확인할 유일한 수단이라, 실시간 화면이 생겼다고 지우지 않는다.
  *
- * 화면 전환에 네비게이션 라이브러리를 넣지 않았다 — 상태 하나로 충분하다. 셋으로 늘어난
+ * 화면 전환에 네비게이션 라이브러리를 넣지 않았다 — 상태 하나로 충분하다. 넷으로 늘어난
  * 지금도 마찬가지다. 의존성은 한 번에 하나씩만 늘린다(마지막으로 늘어난 것은
- * `react-native-audio-api` 하나이고, 설정 화면은 아무것도 더하지 않았다).
+ * `react-native-audio-api` 하나이고, 설정·화자 등록 화면은 아무것도 더하지 않았다 —
+ * 화자 등록도 있던 `MicCapture` 를 그대로 재사용한다).
  *
  * 이 파일이 지고 있는 나머지 세 가지.
  *
@@ -45,6 +47,7 @@ import appConfig from './app.config.json';
 import { ApiError, StreamError } from './src/api';
 import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
+import { EnrollScreen } from './ui/EnrollScreen';
 import { LiveScreen } from './ui/LiveScreen';
 import { SettingsScreen } from './ui/SettingsScreen';
 import type { Settings } from './ui/settings';
@@ -82,13 +85,14 @@ function errorText(err: unknown): string {
   return String(err);
 }
 
-type Tab = 'connect' | 'settings' | 'live';
+type Tab = 'connect' | 'settings' | 'live' | 'enroll';
 
 /** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
 const TABS: { id: Tab; label: string }[] = [
   { id: 'connect', label: '연결 확인' },
   { id: 'settings', label: '설정' },
   { id: 'live', label: '실시간 통역' },
+  { id: 'enroll', label: '화자 등록' },
 ];
 
 function App() {
@@ -235,6 +239,9 @@ function Root({ isDark }: { isDark: boolean }) {
         )}
         {tab === 'live' && (
           <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />
+        )}
+        {tab === 'enroll' && (
+          <EnrollScreen {...shared} config={config} onConfig={setConfig} form={form} />
         )}
       </View>
     </ScrollView>

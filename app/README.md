@@ -29,10 +29,11 @@ app/
     settings.ts       그 화면이 그릴 폼의 모델 + WS config 메시지 조립 (§10)
     inputMode.ts      입력 방식 구현 레지스트리 — 누르고 말하기 / 핸즈프리 (§8)
     LiveScreen.tsx    실시간 통역 화면 (§8)
-    Button.tsx        세 화면이 함께 쓰는 버튼
+    EnrollScreen.tsx  화자 등록 화면 — 목소리 등록 · 조회 · 삭제 (§11)
+    Button.tsx        네 화면이 함께 쓰는 버튼
     theme.ts          색과 공용 스타일 조각
   audio/
-    pcm.ts            Float32↔PCM16 · 리샘플 · 프레이밍 · WAV 읽기 (RN 무의존)
+    pcm.ts            Float32↔PCM16 · 리샘플 · 프레이밍 · WAV 읽기/쓰기 · base64 (RN 무의존)
     capture.ts        마이크 → 규격 PCM16 프레임
     playback.ts       tts.chunk → 순서대로 이어 재생
     module.ts         오디오 라이브러리를 늦게 부르는 한 겹 (§8)
@@ -41,6 +42,7 @@ app/
     types.ts          서버 응답·WS 이벤트 타입 (서버 소스를 읽고 맞춘 것)
     http.ts           fetch 주입, URL 조립, 오류 봉투 → 예외
     config.ts         GET /v1/config
+    speakers.ts       화자 등록 GET/POST/DELETE /v1/speakers* (§11)
     stream.ts         WS 스트리밍 프로토콜 (바이너리 짝짓기 포함)
     translate.ts      POST /v1/translate/{text,audio}
     index.ts          입구 — 앱은 이것만 import 한다
@@ -52,7 +54,7 @@ app/
   tsconfig.test.json  스모크 테스트용 (§3)
 ```
 
-**아직 없는 것**: 온디바이스 ONNX, 네비게이션 라이브러리, 화자 등록.
+**아직 없는 것**: 온디바이스 ONNX, 네비게이션 라이브러리.
 
 **의존성은 한 번에 하나씩만 늘린다.** 순수 RN + `src/api` 로 첫 빌드를 성공시킨 뒤
 실시간 경로를 위해 `react-native-audio-api` **하나만** 더했다 (§8). 다음 차례인
@@ -183,7 +185,7 @@ WS 오류 이벤트. **29개 전부 통과가 정상이다** — RN 을 얹은 �
 
 `npm test` 는 이런 것들을 본다.
 
-- `__tests__/screens.test.tsx` — **세 화면이 실제로 그려지는지**, 폼이 `/v1/config` 응답에서
+- `__tests__/screens.test.tsx` — **네 화면이 실제로 그려지는지**, 폼이 `/v1/config` 응답에서
   만들어지는지(모드 목록이 엔진들의 합집합인지, 못 쓰는 항목이 이유와 함께 잠기는지),
   그리고 **고른 값이 WS `config` 메시지까지 가는지**. 마지막 것은 전역 `WebSocket` 을
   가짜로 바꿔 끼우고 `LiveScreen` 이 실제로 내보내는 첫 메시지를 읽는다 — 화면만 있고
@@ -192,7 +194,12 @@ WS 오류 이벤트. **29개 전부 통과가 정상이다** — RN 을 얹은 �
   오디오가 한 프레임도 나가지 않는지, 누르면 나가고 떼면 `control/flush` 가 나가는지,
   시작하기도 전에 뗀 오터치가 `flush` 를 보내지 않는지, 핸즈프리는 여전히 연결 즉시
   캡처하는지. 마이크 목의 `onAudioReady` 를 가로채 **버퍼가 올라온 것과 같은 처리**를
-  손으로 일으켜 소켓으로 나간 바이트를 센다
+  손으로 일으켜 소켓으로 나간 바이트를 센다.
+  **화자 등록도 같은 원칙으로 본다** (§11) — 참여자 후보가 프로필에서 그대로 나오는지
+  (듣기만 하는 참여자는 빠지고, 참여자가 없으면 자유 입력으로 떨어지는지), 그리고
+  클립을 녹음해 등록을 눌렀을 때 **실제로 나가는 `FormData`** 를 본다 — `fetch` 를
+  가짜로 끼워 `speaker_id`/`mode`/`files` 개수를 확인하고, 서버가 렌더한 `warning` 문장이
+  그대로 뜨는지도 본다
 - `__tests__/App.test.tsx` — App.tsx 가 렌더되는지
 - `__tests__/capture.test.ts` — `audio/capture.ts` 의 **배선**. 라이브러리를 늦게 부르는
   경로가 이어지는지, `/v1/config` 규격이 그대로 `onAudioReady` 옵션으로 가는지,
@@ -200,7 +207,9 @@ WS 오류 이벤트. **29개 전부 통과가 정상이다** — RN 을 얹은 �
 - `__tests__/pcm.test.ts` — **`audio/pcm.ts` 의 계산.** PCM16 변환·클리핑,
   20ms 프레이밍(320샘플 = 640바이트, 자투리는 다음 프레임으로), 48k→16k 리샘플
   (샘플 수와 주파수가 보존되는지), WAV 읽기(**헤더의 44.1kHz 를 쓰고 fallback 을 쓰지 않는지**,
-  스테레오 다운믹스, 헤더도 `sr` 도 없으면 조용히 재생하지 않고 던지는지)
+  스테레오 다운믹스, 헤더도 `sr` 도 없으면 조용히 재생하지 않고 던지는지), **WAV 쓰기**
+  (encode → decode 왕복으로 샘플이 보존되는지, 44바이트 표준 헤더가 맞는지 — 화자 등록
+  클립 업로드용, §11), base64 인코딩(Node 의 `Buffer` 인코딩과 같은 결과를 내는지)
 
 그러느라 `react-native-audio-api` 는 그 패키지가 제공하는 목(`react-native-audio-api/mock`)
 으로 바꿔 끼운다 (`jest.config.js`). jest 는 네이티브 모듈이 없는 Node 에서 돌기 때문이다.
@@ -542,3 +551,90 @@ SettingsScreen  →  App.tsx 의 form  →  streamConfig(config, form, locale)  
   (웹에서도 transient 다)
 - **보이스·번역 문체(`style`)는 넣지 않았다.** 응답에는 있다(`engines[].voices`,
   `llm.styles`). 웹에는 이미 있으므로 같은 규칙으로 더하면 된다
+
+---
+
+## 11. 화자 등록 화면 — `ui/EnrollScreen.tsx`
+
+**다른 과제 #22(STT 품질)에 직접 닿는 기능이다.** 등록된 목소리만 통역하게 하면 TV 소리나
+옆 사람 말이 파이프라인에 아예 들어가지 않는다. 서버·웹 클라이언트(`web/static/app.js` 의
+`enrollVoice`/`toggleEnrollRecording`/`speakerCandidates`)에는 이미 있던 것을 앱에 옮겼다 —
+DOM 코드를 그대로 가져온 것이 아니라 같은 규칙을 RN 으로 다시 썼다.
+
+```
+GET    /v1/speakers          등록된 화자 목록 (임베딩 벡터는 절대 없다 — 서버가 안 준다)
+POST   /v1/speakers/enroll   클립들의 평균 임베딩을 등록 (같은 id 는 대체)
+DELETE /v1/speakers/{id}     즉시 삭제
+```
+
+세 엔드포인트는 `src/api/speakers.ts` 에 있다(`fetchSpeakers`/`enrollSpeaker`/
+`deleteSpeaker`). 정책·임계값·자동 등록 여부·등록 수는 여기 없다 — `GET /v1/config` 의
+`speaker_id` 절(`types.ts` 의 `SpeakerIdView`)에서 온다.
+
+### 참여자 후보 — 프로필을 벗어나지 않는다
+
+등록 id 는 **세션 참여자 id 와 같아야** 대조가 된다. 그래서 화면은 후보 목록을 지어내지
+않고 지금 고른 세션 프로필의 `/v1/config` 의 `profiles[].participants` 를 그대로 쓴다.
+말하는 참여자(`input: true`)만 후보로 남고, 프로필이 참여자를 안 주면(빈 배열) 자유
+입력으로 id 를 받는다 — 웹의 `speakerCandidates()` 와 같은 규칙이다.
+
+### 녹음 — 새 캡처 코드를 만들지 않았다
+
+`audio/capture.ts` 의 `MicCapture` 를 그대로 쓴다. 실시간 화면의 PTT 패턴(누르는 동안
+프레임을 모으고, 떼면 확정)을 따르되 여기서는 버튼이 **토글**이다 — 누르면 시작하고,
+다시 누르면 그 클립 하나를 마친다. 오디오 라이브러리를 늦게 부르는 것도 `MicCapture` 가
+이미 해주므로(`audio/module.ts`) 이 화면은 신경 쓸 필요가 없다 — **이 부분에서 실제로
+앱이 죽은 적이 있어서(§8) 새 코드를 얹지 않고 검증된 것을 재사용했다.**
+
+클립마다 PCM16 프레임을 모아 `audio/pcm.ts` 의 `concatPcm16()` + `encodeWav()` 로 표준
+WAV 로 감싼다. 여러 개의 짧은 클립을 모을수록 평균 임베딩이 안정적이다 — 등록 응답의
+`min_pairwise_similarity` 가 그 근거다(웹과 같은 이유).
+
+### 업로드 — RN 의 `Blob` 이 원시 바이트를 감쌀 수 없다
+
+멀티파트로 파일을 올리려면 보통 `Blob` 을 만드는데, RN 의 `Blob` 생성자는 **다른
+`Blob`/문자열로만** 만들 수 있다(`react-native/Libraries/Blob/Blob.js` 의 주석 —
+"Currently we only support creating Blobs from other Blobs"). 인메모리로 인코딩한
+WAV(`ArrayBuffer`)를 감쌀 방법이 없다는 뜻이다.
+
+그래서 WAV 바이트를 base64 로 인코딩해(`audio/pcm.ts` 의 `bytesToBase64()` — RN 에는
+`btoa` 가 없어서 직접 짰다) `data:audio/wav;base64,...` URI 로 만들고, RN 의
+`FormData` 에는 표준 파일 자리(`{uri, name, type}`)로 올린다. RN 의 네트워킹 계층이
+`data:` URI 를 파일 소스로 직접 읽어준다
+(`ReactAndroid/.../RequestBodyUtil.kt` 의 `getFileInputStream` — 안드로이드로 확인했다,
+iOS 는 아직 다루지 않는다). **새 네이티브 의존성 없이 되는 방법이라 이것을 골랐다** —
+`react-native-blob-util` 같은 라이브러리를 더하지 않아도 된다.
+
+### 화면에서 무엇을 보는가
+
+| | |
+|---|---|
+| **정책** | `speaker_id.policy`/`threshold`/`auto_enroll`/등록 수. `GET /v1/speakers` 를 받은 뒤에는 그쪽 값(더 최신)을 우선한다 — 등록·삭제 직후 반영되도록. 정책 이름은 서버 값을 그대로 보여준다(앱에 이름을 박지 않는다) |
+| **화자 ID** | 참여자 후보가 있으면 칩, 없으면 자유 입력 |
+| **이름** | 선택. 비우면 서버가 id 를 쓴다 |
+| **클립 녹음** | 토글 버튼. 누르면 시작, 다시 누르면 그 클립을 목록에 추가한다. 클립마다 길이(초)와 삭제 버튼이 있다 |
+| **등록** | 클립을 전부 WAV 로 인코딩해 한 번에 올린다. 결과로 등록된 이름/발화 수를 보여주고, **`warning` 이 있으면 그대로** 보여준다(서버가 렌더한 문장 — 유사도가 낮아 다른 사람 목소리가 섞였을 수 있다는 뜻) |
+| **등록된 화자** | `GET /v1/speakers` 조회 결과. 각 항목에 삭제 버튼(`DELETE /v1/speakers/{id}`) |
+
+### 실기기에서 볼 것
+
+1. **설정** 탭에서 참여자가 있는 프로필을 고른다(있다면). **화자 등록** 탭에서 그 참여자
+   id 가 후보 칩으로 뜨는지 본다
+2. **클립 녹음** 을 눌러 몇 마디 말하고 다시 눌러 멈춘다 — 3~5 개쯤 짧은 클립을 모은다
+   (많을수록 평균이 안정적이다)
+3. **등록** 을 누른다 — 등록된 이름/발화 수가 뜨는지, 클립들이 서로 다른 사람처럼
+   들렸다면 `warning` 문장이 뜨는지 본다
+4. **등록된 화자** 목록에 방금 등록한 사람이 보이는지, 삭제하면 목록에서 없어지는지 본다
+5. **정책이 실제로 갈리는지** — 서버의 `speaker_id.policy` 가 `strict`/`enrolled_first` 면
+   **실시간 통역** 탭으로 가서, 등록한 사람이 말하면 통역되고 **다른 사람(또는 TV 소리)이
+   말하면 `speaker.rejected` 로 그 세그먼트가 건너뛰어지는지** 확인한다(§8, "건너뜀" 표시)
+
+### 막혔을 때 어디를 보나
+
+| 증상 | 볼 곳 |
+|---|---|
+| 화자 ID 후보가 하나도 안 뜬다 | 지금 프로필의 `participants` 가 비어 있다는 뜻 — 자유 입력으로 떨어진 것이 맞는지 확인. `설정` 탭에서 프로필을 바꿔본다 |
+| 등록을 눌러도 반응이 없다 | 클립이 하나도 없거나 화자 ID 가 비어 있으면 버튼이 잠긴다 — 클립 목록에 `클립 N개` 가 뜨는지 먼저 본다 |
+| 등록 요청이 서버 오류로 끝난다 | 문장을 그대로 읽는다. `speaker.enroll_needs_files` 면 클립을 더 모아야 하고(`config/defaults.yaml` 의 `speaker_id.min_enroll_files`), `audio.too_large` 면 클립을 줄여야 한다(`server.max_upload_bytes`) |
+| 등록은 됐는데 통역 때 계속 걸러진다 | `min_pairwise_similarity` 경고가 떴었는지 다시 등록해 본다 — 클립에 다른 사람 목소리나 소음이 섞였을 수 있다 |
+| 마이크가 안 열린다 | §8 의 "막혔을 때" 표와 같다 — `MicCapture` 를 그대로 쓰므로 원인도 같다 |

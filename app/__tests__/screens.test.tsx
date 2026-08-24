@@ -25,6 +25,7 @@ import App from '../App';
 import { frameBytes, frameSamples } from '../src/api';
 import type { ModelsResponse, ServerConfig } from '../src/api';
 import { ConnectScreen } from '../ui/ConnectScreen';
+import { EnrollScreen } from '../ui/EnrollScreen';
 import { LiveScreen } from '../ui/LiveScreen';
 import { SettingsScreen } from '../ui/SettingsScreen';
 import { buildFields, streamConfig } from '../ui/settings';
@@ -204,6 +205,22 @@ describe('화면 렌더', () => {
     });
   });
 
+  it('EnrollScreen 이 그려진다 (설정을 아직 못 받은 상태)', async () => {
+    await ReactTestRenderer.act(() => {
+      ReactTestRenderer.create(
+        <EnrollScreen {...common} config={null} onConfig={() => {}} form={{}} />,
+      );
+    });
+  });
+
+  it('EnrollScreen 이 그려진다 (설정을 받은 상태)', async () => {
+    await ReactTestRenderer.act(() => {
+      ReactTestRenderer.create(
+        <EnrollScreen {...common} config={fakeConfig()} onConfig={() => {}} form={{}} />,
+      );
+    });
+  });
+
   it('SettingsScreen 이 그려진다 (설정을 아직 못 받은 상태)', async () => {
     await ReactTestRenderer.act(() => {
       ReactTestRenderer.create(
@@ -253,7 +270,7 @@ describe('화면 렌더', () => {
         node => node.props?.label === label && typeof node.props?.onPress === 'function',
       )[0];
 
-    for (const label of ['설정', '실시간 통역']) {
+    for (const label of ['설정', '실시간 통역', '화자 등록']) {
       const button = tab(label);
       expect(button).toBeDefined();
       await ReactTestRenderer.act(() => {
@@ -883,5 +900,313 @@ describe('LLM 모델', () => {
   it('목록을 모르면 고른 이름을 그대로 보낸다 (직접 적은 경우)', () => {
     const message = streamConfig(fakeConfig(), { model: 'typed-by-hand' }, 'ko') as unknown as Record<string, unknown>;
     expect(message.model).toBe('typed-by-hand');
+  });
+});
+
+/* ---- 화자 등록 화면 ---------------------------------------------------------
+ *
+ * 다른 과제 #22(STT 품질)에 직접 닿는 기능이다 — 등록된 목소리만 통역하게 하면 TV
+ * 소리나 옆 사람 말이 걸러진다. 여기서는 두 가지를 본다.
+ *
+ *   1. 참여자 후보가 /v1/config 의 profiles[].participants 에서 그대로 나오는가
+ *      (듣기만 하는 참여자는 후보에서 빠지고, 참여자가 없는 프로필은 자유 입력으로
+ *      떨어지는가 — 웹의 speakerCandidates() 와 같은 규칙)
+ *   2. 등록 버튼을 누르면 **실제로 서버에 무엇이 나가는지** — fetch 를 가짜로 끼워
+ *      FormData 의 필드 이름과 파일 개수를 확인한다. 화면만 있고 반영이 안 되는 것을
+ *      잡으려는 것이 이 파일 전체의 목적이고, 화자 등록도 예외가 아니다.
+ */
+
+/** fakeConfig() 의 'solo' 프로필에 참여자를 채워 넣은 변형. 화자 등록 화면 전용. */
+function configWithParticipants(): ServerConfig {
+  const config = fakeConfig();
+  const solo = config.profiles.find(p => p.id === 'solo');
+  if (solo) {
+    solo.participants = [
+      // 말하는 참여자 — 후보에 남아야 한다.
+      { id: 'speaker', lang: null, lang_var: 'source_lang', input: true, output: ['listener'] },
+      // 듣기만 하는 참여자 — 목소리를 등록할 이유가 없으니 후보에서 빠져야 한다.
+      { id: 'listener', lang: null, lang_var: 'target_lang', input: false, output: [] },
+    ];
+  }
+  return config;
+}
+
+describe('화자 등록 화면 — 참여자 후보', () => {
+  it('말할 수 있는 참여자만 후보 칩으로 뜬다 (듣기만 하는 참여자는 빠진다)', async () => {
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    await ReactTestRenderer.act(() => {
+      tree = ReactTestRenderer.create(
+        <EnrollScreen
+          {...common}
+          config={configWithParticipants()}
+          onConfig={() => {}}
+          form={{}}
+        />,
+      );
+    });
+
+    // Pressable 은 testID 를 내부 host View 에도 그대로 물려주므로, 우리 칩 자신만 집으려면
+    // onPress 까지 함께 걸러야 한다 — 이 파일의 다른 testID 검색들과 같은 규칙이다.
+    const chip = (id: string) =>
+      tree!.root.findAll(
+        node => node.props?.testID === `speaker:${id}` && typeof node.props?.onPress === 'function',
+      );
+    expect(chip('speaker')).toHaveLength(1);
+    expect(chip('listener')).toHaveLength(0);
+  });
+
+  it('프로필이 참여자를 주지 않으면 자유 입력으로 화자 ID 를 받는다', async () => {
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    await ReactTestRenderer.act(() => {
+      // fakeConfig() 의 프로필들은 participants: [] 다 — 후보가 없는 기본 상태다.
+      tree = ReactTestRenderer.create(
+        <EnrollScreen {...common} config={fakeConfig()} onConfig={() => {}} form={{}} />,
+      );
+    });
+
+    const chips = tree!.root.findAll(
+      node =>
+        typeof node.props?.testID === 'string' &&
+        (node.props.testID as string).startsWith('speaker:') &&
+        typeof node.props?.onPress === 'function',
+    );
+    expect(chips).toHaveLength(0);
+  });
+
+  it('정책·임계값·자동 등록 여부는 /v1/config 의 speaker_id 값을 그대로 보여준다', async () => {
+    const config = fakeConfig();
+    config.speaker_id = {
+      ...config.speaker_id,
+      policy: 'enrolled_first',
+      threshold: 0.42,
+      auto_enroll: true,
+      enrolled: 3,
+    };
+
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    await ReactTestRenderer.act(() => {
+      tree = ReactTestRenderer.create(
+        <EnrollScreen {...common} config={config} onConfig={() => {}} form={{}} />,
+      );
+    });
+
+    const shown = tree!.root
+      .findAll(node => typeof node.props?.children === 'string')
+      .map(node => String(node.props.children))
+      .join('\n');
+    // 정책 이름을 앱이 아는 것이 아니라 서버 값을 그대로 폈다는 것이 요점이다.
+    expect(shown).toContain('enrolled_first');
+    expect(shown).toContain('0.42');
+    expect(shown).toContain('3명');
+  });
+});
+
+describe('화자 등록 배선 — 실제로 서버에 무엇을 보내는지', () => {
+  /** 등록 요청(POST /v1/speakers/enroll)만 가로챈다. 목록 조회는 조용히 성공시킨다. */
+  function fakeEnrollClient(
+    config: ServerConfig,
+    onEnrollRequest: (init: { method?: string; body?: unknown }) => void,
+  ) {
+    return {
+      baseUrl: 'http://server.test',
+      fetch: async (url: string, init?: { method?: string; body?: unknown }) => {
+        if (url.includes('/v1/speakers/enroll')) {
+          onEnrollRequest(init || {});
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            text: async () =>
+              JSON.stringify({
+                speaker: {
+                  id: 'speaker',
+                  name: '나',
+                  utterances: 2,
+                  dim: 192,
+                  engine: 'ecapa',
+                  model: 'v1',
+                  created_at: '',
+                  updated_at: '',
+                },
+                min_pairwise_similarity: 0.4,
+                threshold: 0.6,
+                // 서버가 렌더한 문장 — 앱은 이것을 그대로 보여줘야 한다.
+                warning: '업로드한 발화들의 유사도가 낮다 — 다른 사람의 목소리가 섞였을 수 있다.',
+                enrolled: 1,
+              }),
+            arrayBuffer: async () => new ArrayBuffer(0),
+          };
+        }
+        // GET /v1/speakers — 목록 새로고침. 내용은 이 테스트의 관심사가 아니다.
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          text: async () =>
+            JSON.stringify({
+              policy: config.speaker_id.policy,
+              threshold: config.speaker_id.threshold,
+              auto_enroll: config.speaker_id.auto_enroll,
+              count: 1,
+              error: null,
+              speakers: [],
+            }),
+          arrayBuffer: async () => new ArrayBuffer(0),
+        };
+      },
+    };
+  }
+
+  it('클립 두 개를 녹음해 등록하면 FormData 에 speaker_id·mode·파일 2개가 실린다', async () => {
+    const config = configWithParticipants();
+    const mic = tapMic(config);
+    let captured: { method?: string; body?: unknown } | undefined;
+
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    try {
+      await ReactTestRenderer.act(() => {
+        tree = ReactTestRenderer.create(
+          <EnrollScreen
+            {...common}
+            makeClient={() =>
+              fakeEnrollClient(config, init => {
+                captured = init;
+              })
+            }
+            config={config}
+            onConfig={() => {}}
+            // 설정 화면에서 고른 모드. 화자 임베딩 엔진 라우팅용으로 그대로 나가야 한다.
+            form={{ mode: 'quick' }}
+          />,
+        );
+      });
+
+      const button = (label: string) =>
+        tree!.root.findAll(
+          node => node.props?.label === label && typeof node.props?.onPress === 'function',
+        )[0];
+
+      // 클립 1 — 누르면 시작, 다시 누르면 그 클립을 마친다.
+      await ReactTestRenderer.act(async () => {
+        button('클립 녹음')!.props.onPress();
+        await settled();
+      });
+      expect(mic.opened).toBe(1);
+      await ReactTestRenderer.act(() => {
+        mic.speak();
+      });
+      await ReactTestRenderer.act(async () => {
+        button('녹음 중지')!.props.onPress();
+        await settled();
+      });
+
+      // 클립 2
+      await ReactTestRenderer.act(async () => {
+        button('클립 녹음')!.props.onPress();
+        await settled();
+      });
+      expect(mic.opened).toBe(2);
+      await ReactTestRenderer.act(() => {
+        mic.speak();
+      });
+      await ReactTestRenderer.act(async () => {
+        button('녹음 중지')!.props.onPress();
+        await settled();
+      });
+
+      const beforeSubmit = tree!.root
+        .findAll(node => typeof node.props?.children === 'string')
+        .map(node => String(node.props.children))
+        .join('\n');
+      expect(beforeSubmit).toContain('클립 2개');
+
+      await ReactTestRenderer.act(async () => {
+        button('등록')!.props.onPress();
+        await settled();
+      });
+
+      expect(captured).toBeDefined();
+      expect(captured!.method).toBe('POST');
+      const body = captured!.body as FormData;
+      // 후보가 하나뿐이라 자동으로 그 참여자 id 로 골라져 있다.
+      // RN 의 FormData 타입 선언에는 get() 이 없다(getAll/getParts 만) — 실제 Node
+      // 전역은 get() 도 있지만, RN 앱 코드와 같은 타입으로 검증하려고 getAll() 을 쓴다.
+      expect(body.getAll('speaker_id')).toEqual(['speaker']);
+      expect(body.getAll('mode')).toEqual(['quick']);
+      expect(body.getAll('files')).toHaveLength(2);
+
+      // 서버가 렌더한 경고 문장이 그대로 뜬다 — 앱이 문구를 만들지 않는다.
+      const afterSubmit = tree!.root
+        .findAll(node => typeof node.props?.children === 'string')
+        .map(node => String(node.props.children))
+        .join('\n');
+      expect(afterSubmit).toContain('다른 사람의 목소리가 섞였을 수 있다');
+    } finally {
+      mic.restore();
+      if (tree) {
+        await ReactTestRenderer.act(() => {
+          tree!.unmount();
+        });
+      }
+    }
+  });
+
+  it('이름을 비워 두면 name 필드를 아예 보내지 않는다', async () => {
+    const config = configWithParticipants();
+    const mic = tapMic(config);
+    let captured: { method?: string; body?: unknown } | undefined;
+
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    try {
+      await ReactTestRenderer.act(() => {
+        tree = ReactTestRenderer.create(
+          <EnrollScreen
+            {...common}
+            makeClient={() =>
+              fakeEnrollClient(config, init => {
+                captured = init;
+              })
+            }
+            config={config}
+            onConfig={() => {}}
+            form={{}}
+          />,
+        );
+      });
+
+      const button = (label: string) =>
+        tree!.root.findAll(
+          node => node.props?.label === label && typeof node.props?.onPress === 'function',
+        )[0];
+
+      await ReactTestRenderer.act(async () => {
+        button('클립 녹음')!.props.onPress();
+        await settled();
+      });
+      await ReactTestRenderer.act(() => {
+        mic.speak();
+      });
+      await ReactTestRenderer.act(async () => {
+        button('녹음 중지')!.props.onPress();
+        await settled();
+      });
+
+      await ReactTestRenderer.act(async () => {
+        button('등록')!.props.onPress();
+        await settled();
+      });
+
+      const body = captured!.body as FormData;
+      expect(body.getAll('name')).toEqual([]);
+      expect(body.getAll('mode')).toEqual([]); // 설정에서 고르지 않았으니 역시 나가지 않는다
+      expect(body.getAll('files')).toHaveLength(1);
+    } finally {
+      mic.restore();
+      if (tree) {
+        await ReactTestRenderer.act(() => {
+          tree!.unmount();
+        });
+      }
+    }
   });
 });
