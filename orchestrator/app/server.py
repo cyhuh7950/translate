@@ -7,6 +7,7 @@
     /v1/config       클라이언트가 UI 를 그리는 근거 (모듈들이 자기 섹션을 얹는다)
     /v1/models       프로바이더가 실제로 내주는 모델 목록
     /v1/speakers/*   음성 등록 — 어느 모듈이든 쓰므로 core 다
+    /v1/users/*      사용자(이름/별칭 + PIN) — 마찬가지로 어느 모듈이든 참조하므로 core 다
     /v1/admin/*      설정 리로드·오버라이드
 
 기능은 `app/modules/` 아래 폴더로 붙는다. 이 파일은 그 목록을 알지 못한다 —
@@ -37,6 +38,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .core import i18n, messages, moduleapi, registry
@@ -54,6 +56,7 @@ from .core.llm import ProviderRegistry, Translator
 from .core.moduleapi import ModuleContext
 from .core.sessions import ProfileRegistry
 from .core.speech import SpeechService
+from .core.users import UserStore
 from .core.voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
 
 log = logging.getLogger("orchestrator")
@@ -81,6 +84,9 @@ class State:
         # 자동 등록분은 여기 오지 않는다 — WS 세션의 메모리에만 산다.
         self.voiceprints = VoicePrintStore(self.config)
         self.speaker_engine = SpeakerEngine(self.config, self.engines)
+        # 사용자(이름/별칭 + PIN). DESIGN.md §15 1단계 — 테넌트는 아직 없고, 이
+        # 서버 안에서 사람을 가르는 최소 계정 모델이다.
+        self.users = UserStore(self.config)
         # 오디오↔텍스트와 화자 식별. 흐름에 종속되지 않는 단계라 core 에 있고,
         # 모듈(번역·문서 음성화·학습·대화)이 전부 이것을 쓴다.
         self.speech = SpeechService(
@@ -147,6 +153,14 @@ def error_body(code: str, params: dict, locale: str) -> dict:
         "detail": messages.render(code, params, locale),
         "error": {"code": code, "params": params},
     }
+
+
+class UserCredentials(BaseModel):
+    """등록/로그인이 공유하는 입력. 세션 토큰이 아니라 매 요청에 PIN 을 싣는 방식을
+    쓰기로 했으므로(아래 로그인 라우트의 주석 참고) 등록과 로그인의 입력 모양이 같다."""
+
+    name: str
+    pin: str
 
 
 def _config_dir() -> str:
@@ -564,6 +578,43 @@ def create_app() -> FastAPI:
                 "voiceprint.not_enrolled", status=404, speaker_id=speaker_id
             )
         return {"deleted": speaker_id, "enrolled": state.voiceprints.count()}
+
+    # ---- 사용자 (이름/별칭 + PIN) --------------------------------------------
+    #
+    # 어느 모듈이든 "이 사람이 누구인가"를 물어볼 수 있으므로 core 에 둔다
+    # (DESIGN.md §15). 기존 API 키(auth)는 그대로 서버 전체 접근 키로 남고, 이
+    # 계정은 그 위에 사람을 가르는 계층 하나를 얹는 것뿐이다 — 테넌트는 아직 없다.
+    #
+    # ★ 로그인 응답으로 세션 토큰을 새로 발급하지 않고 `user_id` 만 돌려준다.
+    #   토큰을 쓰려면 토큰 저장소·만료·폐기를 새로 설계해야 하는데, 지금 이
+    #   user_id 가 쓰이는 곳(다음 단계의 화자 등록/STT 개인화 연결, PLAN_LANG_LEARN.md
+    #   서버 작업 2번)은 이미 `auth.api_key` 로 보호된 요청 위에서 "이 요청이 누구
+    #   것인가"만 구분하면 되는 자리다. 그 정도에 토큰 인프라를 새로 만드는 것은
+    #   과했다고 판단했다. 세션이 오래 유지돼야 하거나 PIN 없이 요청을 반복해야
+    #   하는 필요가 생기면 그때 토큰으로 바꾸면 된다 — 클라이언트는 `user_id` 를
+    #   들고 있다가 필요한 요청마다 실어 보내는 것으로 충분하다.
+
+    @app.post("/v1/users", summary="Register a user (name + PIN)", dependencies=[auth])
+    async def register_user(body: UserCredentials) -> dict:
+        """
+        Creates a user identified by name + PIN. This is not an account signup —
+        it only distinguishes people sharing the same server. The PIN is hashed
+        (salted PBKDF2) before it is stored; it is never returned or logged.
+        """
+        state.reload_if_changed()
+        user = state.users.create(name=body.name, pin=body.pin)
+        return {"user": user.public()}
+
+    @app.post("/v1/users/login", summary="Log in with name + PIN", dependencies=[auth])
+    async def login_user(body: UserCredentials) -> dict:
+        """
+        Verifies name + PIN and returns the user id. No session token is issued
+        (see the comment above `/v1/users`) — the client holds on to `user_id` and
+        sends it with requests that need to know which user they belong to.
+        """
+        state.reload_if_changed()
+        user = state.users.authenticate(name=body.name, pin=body.pin)
+        return {"user_id": user.id}
 
     @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:

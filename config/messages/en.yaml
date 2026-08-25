@@ -124,6 +124,17 @@ voiceprint.speaker_required: "A speaker id is required"
 voiceprint.empty_embedding: "The engine returned an empty embedding"
 voiceprint.not_enrolled: "No voice print is enrolled for '{speaker_id}'"
 
+# ---- 사용자 -------------------------------------------------------------------
+users.failed: "The user store could not be used"
+users.store_not_configured: "users.store_path is not configured"
+users.store_unreadable: >-
+  The user store at {path} could not be read ({reason}), so it will not be
+  overwritten. Fix or remove the file, then reload
+users.name_required: "A name is required"
+users.pin_too_short: "The PIN must be at least {minimum} character(s)"
+users.name_taken: "The name '{name}' is already registered"
+users.invalid_credentials: "Name or PIN is incorrect"
+
 # ---- LLM --------------------------------------------------------------------
 llm.unknown_provider: "Unknown provider: '{provider}'. Available: {available}"
 llm.no_provider: >-

@@ -114,6 +114,17 @@ voiceprint.speaker_required: "화자 id 가 필요합니다"
 voiceprint.empty_embedding: "엔진이 빈 임베딩을 돌려줬습니다"
 voiceprint.not_enrolled: "'{speaker_id}' 로 등록된 목소리가 없습니다"
 
+# ---- 사용자 -------------------------------------------------------------------
+users.failed: "사용자 저장소를 사용할 수 없습니다"
+users.store_not_configured: "users.store_path 가 설정되지 않았습니다"
+users.store_unreadable: >-
+  {path} 의 사용자 저장소를 읽을 수 없어({reason}) 덮어쓰지 않습니다. 파일을
+  고치거나 지운 뒤 다시 불러오세요
+users.name_required: "이름이 필요합니다"
+users.pin_too_short: "PIN 은 최소 {minimum}자리여야 합니다"
+users.name_taken: "이름 '{name}' 은(는) 이미 등록돼 있습니다"
+users.invalid_credentials: "이름 또는 PIN 이 올바르지 않습니다"
+
 # ---- LLM --------------------------------------------------------------------
 llm.unknown_provider: "그런 프로바이더가 없습니다: '{provider}'. 사용 가능: {available}"
 llm.no_provider: >-
