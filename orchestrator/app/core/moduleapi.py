@@ -76,6 +76,8 @@ from .engines import EngineRegistry
 from .llm import ProviderRegistry, Translator
 from .sessions import ProfileRegistry
 from .speech import SpeechService
+from .users import UserStore
+from .voice_samples import VoiceSampleStore
 from .voiceprints import SpeakerEngine, VoicePrintStore
 
 log = logging.getLogger("modules")
@@ -109,6 +111,8 @@ class ModuleContext:
         speech          오디오↔텍스트·화자 식별
         voiceprints     명시적으로 등록된 목소리 (파일)
         speaker_engine  화자 임베딩 엔진 호출부
+        users           사용자(이름/별칭 + PIN) 저장소 (DESIGN.md §15)
+        voice_samples   STT 개인화용 사용자별 음성 샘플 저장소 (저장까지만)
         auth            공용 인증 의존성. 라우트에 `dependencies=[ctx.auth]` 로 건다
         ws_authorized   WebSocket 인증. 핸드셰이크 단계에서 부른다
         reload_if_changed  설정 핫 리로드. 요청 처리 앞에서 부른다
@@ -122,6 +126,8 @@ class ModuleContext:
     speech: SpeechService
     voiceprints: VoicePrintStore
     speaker_engine: SpeakerEngine
+    users: UserStore
+    voice_samples: VoiceSampleStore
     auth: Any = None
     ws_authorized: Callable[[Any], bool] = lambda ws: True
     reload_if_changed: Callable[[], bool] = lambda: False

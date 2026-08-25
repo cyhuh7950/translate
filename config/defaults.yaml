@@ -124,6 +124,64 @@ prompts:
     literal: "Translate closely to the original wording."
     natural: "Translate so it sounds natural to a native speaker."
 
+  # `lang_learn` 모듈의 프롬프트. `prompts:` 는 core (app/core/llm.py 의 Translator)가
+  # 이미 쓰는 준-core 섹션이라(moduleapi.py 의 "core 가 쓰는 섹션은 모듈도 읽어도
+  # 된다") 여기에 얹는다 — 모듈 전용 최상위 섹션(`lang_learn:`, 아래)과는 별개로,
+  # 다른 모듈도 나중에 프롬프트가 필요해지면 같은 자리에 자기 하위 키를 더할 수 있다.
+  # 세 호출 모두 **JSON 하나만** 답하도록 강제한다 — 문장 사이에 설명이 섞이면
+  # 파싱이 깨지고, 그 실패를 세션 하나가 통째로 죽는 것으로 처리하기 때문이다
+  # (app/modules/lang_learn/llm.py 의 `_ask_json`).
+  lang_learn:
+    problem_system: |
+      You are a foreign language tutor. The learner's target language is
+      {target_lang}. Their current level is {level} (beginner/intermediate/advanced).
+      Generate ONE practice problem of type "{answer_type}".
+
+      - If the type is "repeat": produce a single natural sentence in
+        {target_lang} for the learner to listen to and repeat aloud. Keep it at
+        the given level (short and simple for beginner, longer and more complex
+        for advanced).
+      - If the type is "compose": describe a short situation or meaning IN
+        {learner_lang} (the learner's own language) and ask the learner to say
+        it in {target_lang}. Do not give away the exact target-language sentence.
+
+      Avoid repeating these recent topics: {recent_topics}
+
+      Respond with ONLY a JSON object, no other text, in this exact shape:
+      {{"text": "<the sentence (repeat) or the situation prompt (compose)>"}}
+    evaluate_system: |
+      You are a foreign language tutor grading one answer. Target language:
+      {target_lang}. Learner level: {level}. Problem type: "{answer_type}".
+
+      Problem given to the learner:
+      {problem_text}
+
+      Learner's answer (transcribed if spoken):
+      {answer_text}
+
+      Score the answer from 0 (completely wrong/unintelligible) to 100
+      (perfect). For "repeat" problems, judge how closely the learner
+      reproduced the sentence. For "compose" problems, judge whether the
+      meaning is conveyed correctly in {target_lang}, allowing for reasonable
+      grammatical variation. Write one short, encouraging comment in
+      {learner_lang}.
+
+      Respond with ONLY a JSON object, no other text, in this exact shape:
+      {{"score": <integer 0-100>, "comment": "<short comment in {learner_lang}>"}}
+    summary_system: |
+      You are a foreign language tutor. The learner just finished a practice
+      session in {target_lang} at level {level}. Here are all the problems,
+      their answers and their scores:
+
+      {transcript}
+
+      Write one short overall comment in {learner_lang} (encouraging, and
+      naming one concrete thing to work on), and an overall score from 0 to
+      100 for the whole session.
+
+      Respond with ONLY a JSON object, no other text, in this exact shape:
+      {{"score": <integer 0-100>, "comment": "<short overall comment in {learner_lang}>"}}
+
 audio:
   # STT 엔진에 보낼 입력 규격. WS 스트림의 바이너리 프레임도 이 값을 따른다
   # (클라이언트가 다른 값을 선언하면 조용히 리샘플링하지 않고 오류로 알린다).
@@ -464,3 +522,82 @@ messages:
   # 보고하지 않게 하려는 것뿐이고, 서버 동작에는 쓰이지 않는다.
   #   http.*   프레임워크가 만든 응답에 붙는 http.<상태코드>
   dynamic_prefixes: ["http."]
+
+# ---------------------------------------------------------------------------
+# 외국어 학습 모듈 (app/modules/lang_learn) — DESIGN.md §15 / PLAN_LANG_LEARN.md
+# ---------------------------------------------------------------------------
+
+lang_learn:
+  # 사용자별로 저장되는 값들의 기본치 (아직 아무도 설정을 저장하지 않은 사용자).
+  # PUT 은 부분 갱신을 허용한다(app/modules/lang_learn/routes.py 주석 참고) — 저장된
+  # 값과 여기 기본값을 키 단위로 합친 것이 GET 의 응답이다.
+  defaults:
+    schedule: []                  # [{time: "HH:MM", count: N}, ...] 빈 배열 = 스케줄 없음
+    target_lang: en
+    level_mode: adaptive          # adaptive | manual
+    manual_level: null
+    feedback_mode: both           # immediate | summary | both
+    show_text_for_repeat: false
+
+  # 사용자별 설정 저장 파일. 다른 저장소와 같은 쓰기 가능 볼륨(../data)을 쓰되
+  # 파일은 나눈다 — 하나가 깨져도 다른 것은 멀쩡해야 한다(users.py/voiceprints.py
+  # 와 같은 규칙).
+  settings_store_path: /data/lang_learn_settings.json
+
+  # 세션 이력(문제·답변·평가·총평) 저장 파일. 사용자당 무한히 쌓이지 않도록
+  # 아래 history_max_per_user 로 오래된 것부터 정리한다.
+  history_store_path: /data/lang_learn_history.json
+  history_max_per_user: 200
+
+  # 난이도 단계. 순서가 등급이다(낮은 인덱스가 쉬움) — 적응형 조정은 이 목록에서
+  # 한 단계씩 옮긴다. manual_level 도 이 목록의 값 중 하나여야 한다.
+  levels: [beginner, intermediate, advanced]
+  # level_mode=adaptive 인 신규 사용자(이력 없음)가 시작하는 단계.
+  default_level: beginner
+
+  # 적응형 난이도 조정 — 최근 세션들의 평균 내부 점수로 한 단계씩 옮긴다.
+  # 공식은 의도적으로 단순하다(세 세션 이동평균 + 임계값 두 개). 정교한 커브가
+  # 필요해지면 그때 바꾼다 — 지금은 "몇 번 잘하면 올리고 몇 번 못하면 내린다"
+  # 정도만 있으면 충분하다는 판단이다.
+  adaptive:
+    lookback_sessions: 3          # 최근 몇 세션의 평균을 볼지
+    raise_threshold: 80           # 평균이 이 이상이면 한 단계 올린다
+    lower_threshold: 40           # 평균이 이 이하면 한 단계 내린다
+
+  # 내부 점수(0~100, 이력에만 남는다) → 프로토콜에 나가는 등급.
+  # 점수는 절대 클라이언트로 나가지 않는다(DESIGN.md §15) — 등급만 나간다.
+  grade_bands:
+    상: 80   # score >= 80
+    중: 50   # score >= 50, else 하
+
+  # 세션당 문제 유형이 오가는 순서. LLM 에게 유형까지 고르게 하면 답을 파싱해야
+  # 할 필드가 하나 늘고 실패 모드도 늘어난다 — 유형은 서버가 정하고 LLM 은 그
+  # 유형의 문제만 만들게 하는 것이 더 단단하다. 목록을 다 쓰면 반복한다.
+  answer_type_pattern: [repeat, compose]
+
+  # STT 개인화 샘플 채택 — 학습 세션 중 사용자가 보낸 음성 답변 중 이 비율만
+  # `voice_samples` 저장소에 남긴다. 전부 저장하면(=1.0) 세션 하나가 다른 흐름
+  # (번역 등)에서 모인 표본보다 압도적으로 많아져서 재학습 표본이 "학습 세션에서
+  # 읽은 스크립트 말투"로 편향된다. 1/3 정도면 목소리 특징을 익히기에 충분하면서
+  # 편향은 줄어든다는 판단 — 정교한 근거가 있는 값은 아니고, 운영하며 조정할
+  # 여지를 설정으로 열어둔 것뿐이다.
+  voice_sample_capture_rate: 0.34
+
+  # STT/TTS 호출에 쓸 라우팅 모드(core.enginecall 의 mode). 실시간 스트림이 아니라
+  # 문제 하나·답변 하나 단위의 왕복이므로 배치 라우팅을 쓴다.
+  stt_mode: batch
+  tts_mode: batch
+
+  llm:
+    provider: null   # null 이면 llm.default_provider
+    model: null       # null 이면 그 프로바이더의 default_model
+
+  stream:
+    path: /v1/lang_learn/stream
+    # 접속 후 start 메시지를 기다리는 시간(초). 넘기면 끊는다 (stream.config_timeout_s
+    # 와 같은 규칙, 값은 이 모듈이 따로 갖는다 — 학습 세션은 사용자가 로그인 화면을
+    # 거친 뒤 여는 것이라 더 여유를 줄 수 있다).
+    start_timeout_s: 20
+    answer_timeout_s: 120
+    unauthorized_close_code: 1008
+    default_count: 5

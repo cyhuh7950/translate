@@ -209,6 +209,47 @@ stream.setup_failed: "스트림을 준비하지 못했습니다: {reason}"
 # ---- 파이프라인 -------------------------------------------------------------
 pipeline.failed: "처리에 실패했습니다 ({error}): {reason}"
 
+# ---- 언어 학습 (lang_learn 모듈) --------------------------------------------
+lang_learn.failed: "언어 학습 세션을 이어가지 못했습니다"
+lang_learn.user_required: "사용자 id 가 필요합니다"
+lang_learn.unknown_user: "id '{user_id}' 인 사용자를 찾을 수 없습니다"
+
+lang_learn.settings_failed: "언어 학습 설정 저장소를 사용할 수 없습니다"
+lang_learn.settings_store_not_configured: "lang_learn.settings_store_path 가 설정되지 않았습니다"
+lang_learn.settings_store_unreadable: >-
+  {path} 의 언어 학습 설정 저장소를 읽지 못했습니다({reason}). 남은 내용을 지키기
+  위해 그대로 두었습니다
+lang_learn.invalid_schedule: "schedule 은 {{time, count}} 형태 항목의 목록이어야 합니다"
+lang_learn.invalid_schedule_time: "'{time}' 은 올바른 HH:MM 시각이 아닙니다"
+lang_learn.invalid_schedule_count: "스케줄의 count 는 양수여야 합니다 (받은 값: {count})"
+lang_learn.target_lang_required: "target_lang 이 필요합니다"
+lang_learn.invalid_level_mode: "level_mode 는 'adaptive' 또는 'manual' 이어야 합니다 (받은 값: '{level_mode}')"
+lang_learn.invalid_level: "'{level}' 은 올바른 단계가 아닙니다 (가능한 값: {available})"
+lang_learn.invalid_feedback_mode: >-
+  feedback_mode 는 'immediate', 'summary', 'both' 중 하나여야 합니다 (받은 값: '{feedback_mode}')
+lang_learn.unknown_settings_field: "알 수 없는 설정 필드: {fields}"
+
+lang_learn.history_failed: "언어 학습 이력 저장소를 사용할 수 없습니다"
+lang_learn.history_store_not_configured: "lang_learn.history_store_path 가 설정되지 않았습니다"
+lang_learn.history_store_unreadable: >-
+  {path} 의 언어 학습 이력 저장소를 읽지 못했습니다({reason}). 남은 내용을 지키기
+  위해 그대로 두었습니다
+
+lang_learn.llm_response_invalid: "튜터 모델이 올바른 JSON 을 돌려주지 않았습니다: {raw}"
+
+lang_learn.start_timeout: >-
+  {timeout}초 안에 start 메시지가 오지 않았습니다. 먼저 {{"type":"start", "user_id":...}} 를 보내세요
+lang_learn.start_required: >-
+  첫 메시지는 JSON {{"type":"start", "user_id":...}} 여야 합니다
+lang_learn.bad_json: "메시지를 해석하지 못했습니다: {reason}"
+lang_learn.invalid_count: "count 는 양수여야 합니다 (받은 값: {count})"
+lang_learn.no_answer_type_pattern: "lang_learn.answer_type_pattern 이 비어 있습니다"
+lang_learn.answer_timeout: "{timeout}초 안에 문제 {idx} 의 답변이 오지 않았습니다"
+lang_learn.answer_required: >-
+  {{"type":"answer","idx":{idx},...}} 형태의 메시지가 필요합니다
+lang_learn.unknown_modality: "모르는 답변 형식입니다: '{modality}'"
+lang_learn.audio_required: "문제 {idx} 의 답변으로 오디오 바이트가 필요합니다"
+
 # ---- 그 밖 ------------------------------------------------------------------
 internal.error: "예상하지 못한 이유로 요청을 처리하지 못했습니다"
 http.error: "요청을 처리하지 못했습니다 ({status}): {detail}"

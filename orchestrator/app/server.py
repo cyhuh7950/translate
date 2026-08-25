@@ -305,6 +305,8 @@ def create_app() -> FastAPI:
         speech=state.speech,
         voiceprints=state.voiceprints,
         speaker_engine=state.speaker_engine,
+        users=state.users,
+        voice_samples=state.voice_samples,
         auth=auth,
         ws_authorized=lambda ws: _ws_authorized(state, ws),
         reload_if_changed=state.reload_if_changed,

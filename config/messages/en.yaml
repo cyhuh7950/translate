@@ -222,6 +222,47 @@ stream.setup_failed: "The stream could not be set up: {reason}"
 # ---- 파이프라인 -------------------------------------------------------------
 pipeline.failed: "Processing failed ({error}): {reason}"
 
+# ---- 언어 학습 (lang_learn 모듈) --------------------------------------------
+lang_learn.failed: "The language-learning session could not continue"
+lang_learn.user_required: "A user id is required"
+lang_learn.unknown_user: "No user found with id '{user_id}'"
+
+lang_learn.settings_failed: "The language-learning settings store could not be used"
+lang_learn.settings_store_not_configured: "lang_learn.settings_store_path is not configured"
+lang_learn.settings_store_unreadable: >-
+  The language-learning settings store at {path} could not be read ({reason}). It has
+  not been touched to avoid losing what is left of it
+lang_learn.invalid_schedule: "schedule must be a list of {{time, count}} entries"
+lang_learn.invalid_schedule_time: "'{time}' is not a valid HH:MM time"
+lang_learn.invalid_schedule_count: "Schedule count must be a positive number, got {count}"
+lang_learn.target_lang_required: "target_lang is required"
+lang_learn.invalid_level_mode: "level_mode must be 'adaptive' or 'manual', got '{level_mode}'"
+lang_learn.invalid_level: "'{level}' is not a valid level (available: {available})"
+lang_learn.invalid_feedback_mode: >-
+  feedback_mode must be 'immediate', 'summary' or 'both', got '{feedback_mode}'
+lang_learn.unknown_settings_field: "Unknown settings field(s): {fields}"
+
+lang_learn.history_failed: "The language-learning history store could not be used"
+lang_learn.history_store_not_configured: "lang_learn.history_store_path is not configured"
+lang_learn.history_store_unreadable: >-
+  The language-learning history store at {path} could not be read ({reason}). It has
+  not been touched to avoid losing what is left of it
+
+lang_learn.llm_response_invalid: "The tutor model did not return valid JSON: {raw}"
+
+lang_learn.start_timeout: >-
+  No start message within {timeout}s. Send {{"type":"start", "user_id":...}} first
+lang_learn.start_required: >-
+  The first message must be a JSON {{"type":"start", "user_id":...}}
+lang_learn.bad_json: "Could not parse the message: {reason}"
+lang_learn.invalid_count: "count must be a positive number, got {count}"
+lang_learn.no_answer_type_pattern: "lang_learn.answer_type_pattern is empty"
+lang_learn.answer_timeout: "No answer for problem {idx} within {timeout}s"
+lang_learn.answer_required: >-
+  Expected {{"type":"answer","idx":{idx},...}}
+lang_learn.unknown_modality: "Unknown answer modality: '{modality}'"
+lang_learn.audio_required: "Expected audio bytes for the answer to problem {idx}"
+
 # ---- 그 밖 ------------------------------------------------------------------
 #
 # `http.*` 는 프레임워크가 만든 응답(없는 경로, 허용되지 않은 메서드, 본문 검증)에
