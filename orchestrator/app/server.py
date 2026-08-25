@@ -6,8 +6,9 @@
     /health          살아 있는가
     /v1/config       클라이언트가 UI 를 그리는 근거 (모듈들이 자기 섹션을 얹는다)
     /v1/models       프로바이더가 실제로 내주는 모델 목록
-    /v1/speakers/*   음성 등록 — 어느 모듈이든 쓰므로 core 다
-    /v1/users/*      사용자(이름/별칭 + PIN) — 마찬가지로 어느 모듈이든 참조하므로 core 다
+    /v1/speakers/*   음성 등록 — 어느 모듈이든 쓰므로 core 다. `user_id` 는 선택 파라미터
+    /v1/users/*      사용자(이름/별칭 + PIN), 사용자별 STT 개인화 음성 샘플 —
+                     마찬가지로 어느 모듈이든 참조하므로 core 다
     /v1/admin/*      설정 리로드·오버라이드
 
 기능은 `app/modules/` 아래 폴더로 붙는다. 이 파일은 그 목록을 알지 못한다 —
@@ -57,6 +58,7 @@ from .core.moduleapi import ModuleContext
 from .core.sessions import ProfileRegistry
 from .core.speech import SpeechService
 from .core.users import UserStore
+from .core.voice_samples import VoiceSampleStore
 from .core.voiceprints import SpeakerEngine, VoicePrintError, VoicePrintStore
 
 log = logging.getLogger("orchestrator")
@@ -87,6 +89,9 @@ class State:
         # 사용자(이름/별칭 + PIN). DESIGN.md §15 1단계 — 테넌트는 아직 없고, 이
         # 서버 안에서 사람을 가르는 최소 계정 모델이다.
         self.users = UserStore(self.config)
+        # STT 개인화용 음성 샘플 (사용자별 발화 축적, 저장까지만 — 재학습 파이프라인은
+        # 아직 없다. PLAN_LANG_LEARN.md 서버 작업 2번).
+        self.voice_samples = VoiceSampleStore(self.config)
         # 오디오↔텍스트와 화자 식별. 흐름에 종속되지 않는 단계라 core 에 있고,
         # 모듈(번역·문서 음성화·학습·대화)이 전부 이것을 쓴다.
         self.speech = SpeechService(
@@ -460,23 +465,32 @@ def create_app() -> FastAPI:
     #   절대 벡터를 싣지 않는다 (app/core/voiceprints.py 의 주석을 볼 것).
 
     @app.get("/v1/speakers", summary="Enrolled voice prints", dependencies=[auth])
-    async def list_speakers() -> dict:
+    async def list_speakers(
+        user_id: str | None = Query(
+            None, description="If given, only voice prints owned by this user are listed"
+        ),
+    ) -> dict:
         """
         Voices enrolled on this server, without the embeddings themselves.
 
         Voices learned automatically during a live session are NOT listed here:
         they only ever exist in that session's memory and disappear with it.
+
+        `user_id` is optional and additive: omit it (existing clients) and every
+        enrolled voice is listed exactly as before. Pass it to see only the voices
+        that were enrolled under that user.
         """
         state.reload_if_changed()
         c = state.config
         status = state.voiceprints.status()
+        speakers = state.voiceprints.list(user_id=user_id)
         return {
             "policy": c.get("speaker_id.policy"),
             "threshold": c.get("speaker_id.threshold"),
             "auto_enroll": c.get("speaker_id.auto_enroll.enabled"),
-            "count": status["count"],
+            "count": status["count"] if user_id is None else len(speakers),
             "error": status["error"],
-            "speakers": [vp.public() for vp in state.voiceprints.list()],
+            "speakers": [vp.public() for vp in speakers],
         }
 
     @app.post(
@@ -491,6 +505,9 @@ def create_app() -> FastAPI:
         ),
         name: str | None = Form(None, description="Display name. Defaults to the id"),
         mode: str | None = Form(None, description="Session mode used to route the speaker engine"),
+        user_id: str | None = Form(
+            None, description="Owning user (core.users). Optional — omit for the old, unscoped behavior"
+        ),
         files: list[UploadFile] = File(
             ..., description="Utterances of this person. More utterances give a steadier print"
         ),
@@ -501,6 +518,11 @@ def create_app() -> FastAPI:
         An existing entry with the same id is replaced. `min_pairwise_similarity`
         reports how alike the uploaded utterances were: a low value usually means
         one of them is somebody else.
+
+        `user_id` is optional. Omitting it enrolls exactly as before (no owner
+        recorded). Passing it tags the voice print as belonging to that user, which
+        `GET /v1/speakers?user_id=...` and `DELETE /v1/speakers/{id}?user_id=...`
+        can then filter on.
         """
         state.reload_if_changed()
         c = state.config
@@ -544,6 +566,7 @@ def create_app() -> FastAPI:
             dim=int(body.get("dim") or 0),
             engine=str(body.get("engine") or ""),
             model=str(body.get("model") or ""),
+            user_id=user_id,
         )
 
         threshold = float(c.get("speaker_id.threshold"))
@@ -569,10 +592,21 @@ def create_app() -> FastAPI:
         summary="Delete an enrolled voice print",
         dependencies=[auth],
     )
-    async def delete_speaker(speaker_id: str) -> dict:
-        """Removes the stored embedding immediately."""
+    async def delete_speaker(
+        speaker_id: str,
+        user_id: str | None = Query(
+            None,
+            description="If given, only deletes when this voice print belongs to that user",
+        ),
+    ) -> dict:
+        """Removes the stored embedding immediately.
+
+        `user_id` is optional. Omit it (existing clients) to delete regardless of
+        owner, exactly as before. Pass it to only delete a voice print that belongs
+        to that user — a mismatch is reported the same as "not enrolled".
+        """
         state.reload_if_changed()
-        removed = state.voiceprints.delete(speaker_id)
+        removed = state.voiceprints.delete(speaker_id, user_id=user_id)
         if not removed:
             raise VoicePrintError(
                 "voiceprint.not_enrolled", status=404, speaker_id=speaker_id
@@ -615,6 +649,74 @@ def create_app() -> FastAPI:
         state.reload_if_changed()
         user = state.users.authenticate(name=body.name, pin=body.pin)
         return {"user_id": user.id}
+
+    # ---- STT 개인화용 음성 샘플 ------------------------------------------------
+    #
+    # PLAN_LANG_LEARN.md 서버 작업 2번 — 사용자가 말한 발화 일부를 사람 단위로
+    # 모아뒀다가, 나중에(이 범위 밖) 그 사람 목소리로 STT 를 재학습하는 데 쓴다.
+    #
+    # ★ 여기서 저장되는 것은 화자 임베딩보다 더 민감하다 — 원본 오디오 자체이고
+    #   말한 내용까지 담고 있다(app/core/voice_samples.py 상단 주석). 목록 API 는
+    #   메타데이터만 내려주고 오디오는 절대 내려주지 않는다.
+    #
+    # 언제 저장할지(어느 번역/학습 흐름에서 이 저장소를 채울지)는 아직 배선하지
+    # 않았다 — 아래 POST 는 그 배선이 붙기 전까지 수동/테스트로 저장할 수 있게
+    # 열어 둔 것이고, 실제 자동 저장은 다음 단계(`lang_learn` 모듈)가 결정한다.
+
+    @app.post(
+        "/v1/users/{user_id}/voice_samples",
+        summary="Save a voice sample for STT personalization",
+        dependencies=[auth],
+    )
+    async def save_voice_sample(
+        user_id: str,
+        file: UploadFile = File(..., description="One utterance"),
+        duration_s: float = Form(..., description="Length of the utterance in seconds"),
+        source: str | None = Form(
+            None, description="Optional hint for which flow produced this sample"
+        ),
+    ) -> dict:
+        """
+        Stores one utterance under this user for later STT personalization.
+
+        Nothing calls this automatically yet — a future flow (language learning
+        sessions, translation sessions, ...) decides when to. This exists so the
+        store can be exercised and so an explicit save is possible in the meantime.
+        Retention (max per user, max age, max sample length) is enforced from
+        `voice_samples.*` config, not by the caller.
+        """
+        state.reload_if_changed()
+        data = await file.read()
+        vs = state.voice_samples.save(
+            user_id=user_id,
+            audio=data,
+            content_type=file.content_type or "application/octet-stream",
+            duration_s=duration_s,
+            source=source or "",
+        )
+        return {"sample": vs.public(), "count": state.voice_samples.count(user_id=user_id)}
+
+    @app.get(
+        "/v1/users/{user_id}/voice_samples",
+        summary="List voice sample metadata for a user",
+        dependencies=[auth],
+    )
+    async def list_voice_samples(user_id: str) -> dict:
+        """Metadata only (id, timestamps, duration, size) — never the audio itself."""
+        state.reload_if_changed()
+        samples = state.voice_samples.list(user_id=user_id)
+        return {"user_id": user_id, "count": len(samples), "samples": [vs.public() for vs in samples]}
+
+    @app.delete(
+        "/v1/users/{user_id}/voice_samples",
+        summary="Delete all voice samples for a user",
+        dependencies=[auth],
+    )
+    async def delete_voice_samples(user_id: str) -> dict:
+        """Removes every stored sample (metadata + audio) for this user immediately."""
+        state.reload_if_changed()
+        removed = state.voice_samples.delete_all(user_id=user_id)
+        return {"user_id": user_id, "deleted": removed}
 
     @app.post("/v1/admin/reload", summary="Reload configuration", dependencies=[auth])
     async def reload_config() -> dict:

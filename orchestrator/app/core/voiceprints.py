@@ -89,6 +89,12 @@ class VoicePrint:
     dim: int = 0
     engine: str = ""
     model: str = ""
+    # 이 화자가 속한 사용자(core.users 의 User.id). **선택 필드다** — DESIGN.md §15
+    # 이전(사용자 모델이 없던 시절)에 등록된 화자에는 없고, 그런 기존 파일이 이 필드
+    # 없이 그대로 읽혀야 한다(하위호환). None 이면 "누구 것인지 모른다/사용자 구분이
+    # 없던 시절 등록" 으로 취급하고, 사용자별 목록 조회에서는 특정 user_id 로 필터링할
+    # 때만 걸러진다 — user_id 를 안 준 기존 호출은 여전히 전체를 본다.
+    user_id: str | None = None
 
     def public(self) -> dict:
         """클라이언트에 내보내는 형태. **임베딩은 절대 넣지 않는다.**"""
@@ -99,6 +105,7 @@ class VoicePrint:
             "dim": self.dim,
             "engine": self.engine,
             "model": self.model,
+            "user_id": self.user_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -165,6 +172,8 @@ class VoicePrintStore:
                     dim=int(item.get("dim") or len(item["embedding"])),
                     engine=str(item.get("engine") or ""),
                     model=str(item.get("model") or ""),
+                    # 기존 파일에는 이 키가 없다 — 없으면 None (하위호환).
+                    user_id=(str(item["user_id"]) if item.get("user_id") else None),
                 )
                 self._prints[vp.id] = vp
         except Exception as exc:
@@ -199,6 +208,8 @@ class VoicePrintStore:
                     "dim": vp.dim,
                     "engine": vp.engine,
                     "model": vp.model,
+                    # None 이면 그냥 안 쓴다 — 기존 파일 포맷과 같은 모양을 유지한다.
+                    **({"user_id": vp.user_id} if vp.user_id else {}),
                     "created_at": vp.created_at,
                     "updated_at": vp.updated_at,
                 }
@@ -216,10 +227,15 @@ class VoicePrintStore:
 
     # ---- 조회 -------------------------------------------------------------
 
-    def list(self) -> list[VoicePrint]:
+    def list(self, *, user_id: str | None = None) -> list[VoicePrint]:
+        """전체 목록. `user_id` 를 주면 그 사용자 소유(및 소유가 없던 등록분은 포함하지
+        않는다)로만 좁힌다 — 안 주면(기존 호출) 항상 전체를 본다, 회귀 없음."""
         self._ensure()
         with self._lock:
-            return list(self._prints.values())
+            items = list(self._prints.values())
+        if user_id is not None:
+            items = [vp for vp in items if vp.user_id == user_id]
+        return items
 
     def get(self, speaker_id: str) -> VoicePrint | None:
         self._ensure()
@@ -256,8 +272,15 @@ class VoicePrintStore:
         dim: int = 0,
         engine: str = "",
         model: str = "",
+        user_id: str | None = None,
     ) -> VoicePrint:
-        """등록하거나 갱신한다. 같은 id 가 있으면 통째로 대체한다."""
+        """등록하거나 갱신한다. 같은 id 가 있으면 통째로 대체한다.
+
+        `user_id` 를 주지 않으면(기존 호출) 소유자 없이 등록된다 — 기존 동작과 같다.
+        기존 등록을 갱신하면서 `user_id` 를 주지 않으면 이전에 있던 소유자 정보가
+        지워지지 않고 그대로 유지된다(같은 클라이언트가 매번 user_id 를 안 실어도
+        한 번 붙은 소유자가 사라지지 않게).
+        """
         if not speaker_id:
             raise VoicePrintError("voiceprint.speaker_required", status=400)
         vec = [float(x) for x in embedding]
@@ -277,16 +300,22 @@ class VoicePrintStore:
                 dim=int(dim or len(vec)),
                 engine=engine,
                 model=model,
+                user_id=user_id if user_id is not None else (existing.user_id if existing else None),
             )
             self._prints[speaker_id] = vp
             self._save()
         log.info("Enrolled voice print '%s' (%d utterance(s))", speaker_id, utterances)
         return vp
 
-    def delete(self, speaker_id: str) -> bool:
+    def delete(self, speaker_id: str, *, user_id: str | None = None) -> bool:
+        """지운다. `user_id` 를 주면 그 사용자 소유일 때만 지운다(다른 사용자 것은
+        건드리지 않고 '없음'과 같이 취급) — 안 주면(기존 호출) 소유자와 무관하게 지운다."""
         self._ensure()
         with self._lock:
-            if speaker_id not in self._prints:
+            existing = self._prints.get(speaker_id)
+            if existing is None:
+                return False
+            if user_id is not None and existing.user_id != user_id:
                 return False
             del self._prints[speaker_id]
             self._save()

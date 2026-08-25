@@ -125,6 +125,16 @@ users.pin_too_short: "PIN 은 최소 {minimum}자리여야 합니다"
 users.name_taken: "이름 '{name}' 은(는) 이미 등록돼 있습니다"
 users.invalid_credentials: "이름 또는 PIN 이 올바르지 않습니다"
 
+# ---- STT 개인화 음성 샘플 ------------------------------------------------------
+voice_samples.failed: "음성 샘플 저장소를 사용할 수 없습니다"
+voice_samples.store_not_configured: "voice_samples.store_path 가 설정되지 않았습니다"
+voice_samples.store_unreadable: >-
+  {path} 의 음성 샘플 저장소를 읽을 수 없어({reason}) 덮어쓰지 않습니다. 파일을
+  고치거나 지운 뒤 다시 불러오세요
+voice_samples.user_required: "사용자 id 가 필요합니다"
+voice_samples.empty_audio: "오디오가 전달되지 않았습니다"
+voice_samples.too_long: "샘플이 {duration_s}초로, 제한({maximum}초)을 넘습니다"
+
 # ---- LLM --------------------------------------------------------------------
 llm.unknown_provider: "그런 프로바이더가 없습니다: '{provider}'. 사용 가능: {available}"
 llm.no_provider: >-

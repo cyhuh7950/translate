@@ -135,6 +135,16 @@ users.pin_too_short: "The PIN must be at least {minimum} character(s)"
 users.name_taken: "The name '{name}' is already registered"
 users.invalid_credentials: "Name or PIN is incorrect"
 
+# ---- STT personalization voice samples ---------------------------------------
+voice_samples.failed: "The voice sample store could not be used"
+voice_samples.store_not_configured: "voice_samples.store_path is not configured"
+voice_samples.store_unreadable: >-
+  The voice sample store at {path} could not be read ({reason}), so it will not
+  be overwritten. Fix or remove the file, then reload
+voice_samples.user_required: "A user id is required"
+voice_samples.empty_audio: "No audio was provided"
+voice_samples.too_long: "Sample is {duration_s}s, longer than the {maximum}s limit"
+
 # ---- LLM --------------------------------------------------------------------
 llm.unknown_provider: "Unknown provider: '{provider}'. Available: {available}"
 llm.no_provider: >-
