@@ -2,6 +2,29 @@
 
 세션이 끊겨도 어디까지 했는지 알 수 있도록 남기는 기록. 최신 항목이 위.
 
+## 2026-08-30 (4)
+- 학습 설정 화면(`ui/LangLearnSettingsScreen.tsx`) 구현 — PLAN_LANG_LEARN.md 앱 작업 2번.
+  스케줄(추가/삭제)·학습 언어·난이도(adaptive/manual)·feedback_mode·show_text_for_repeat를
+  `GET/PUT /v1/users/{id}/lang_learn/settings`로 조회·저장. 학습 언어/난이도 목록은
+  `/v1/config`에서 온다(하드코딩 없음). 저장에 성공하면 `notifications.ts`의
+  `scheduleLangLearnNotifications`로 기기 알림을 다시 예약.
+- `src/api/langlearn.ts`에 `putLangLearnSettings` 추가.
+- 알림 탭 → 학습 세션 진입 배선(PLAN 앱 작업 3번 마지막 조각) — `App.tsx`에
+  `onLangLearnNotificationPress(() => setTab('learn'))`를 걸어, 콜드 스타트/포그라운드
+  알림 탭 모두 학습 세션 탭으로 이동하게 함. 새 탭 "학습 설정"도 추가(로그인/설정/세션 사이).
+- `__tests__/learn-settings.test.tsx` 추가(PUT 바디·notifee 재예약 호출 검증). `npm run
+  verify` 전체 통과(11개 스위트, 79개 테스트).
+- 실기기+실서버 종단 확인: `learntest` 계정으로 스케줄 07:30/3문제 저장 →
+  `GET .../lang_learn/settings`로 서버 반영 확인 → 앱 재시작 후 그 값이 그대로
+  다시 로드되는 것 확인 → POST_NOTIFICATIONS 권한 승인 → `lang_learn` 알림 채널
+  생성까지 확인(`dumpsys notification`). **주의**: 실제 OS `AlarmManager`에 알람이
+  등록됐는지는 `dumpsys alarm`으로 이 기기(Samsung One UI)에서 끝내 확인하지
+  못했다 — 채널 생성·권한 승인·JS 쪽 성공 콜백까지는 다 맞고 단위 테스트도 notifee
+  API 호출 자체(파라미터 포함)를 검증하지만, 07:30에 실제로 알림이 뜨는지는
+  아직 실측하지 못한 상태. 다음에 시간 여유가 있으면 그 시각까지 기다려서 확인할 것.
+- 다음: 위 알림 실측 확인 외에 남은 항목 없음 — DESIGN.md §15 1단계(로그인·설정·
+  세션·로컬알림) 앱쪽 구현이 전부 끝났다.
+
 ## 2026-08-30 (3)
 - 학습 세션(문제 풀이) 화면(`ui/LearnScreen.tsx`) 구현 — PLAN_LANG_LEARN.md 앱 작업 4번.
   `src/api/langlearn.ts`(WS 클라이언트, `getLangLearnSettings`), `audio/pcm.ts`의

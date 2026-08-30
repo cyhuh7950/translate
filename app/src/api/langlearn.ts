@@ -25,6 +25,21 @@ export function getLangLearnSettings(client: ApiClient, userId: string): Promise
   return request<LangLearnSettings>(client, `/v1/users/${encodeURIComponent(userId)}/lang_learn/settings`);
 }
 
+/**
+ * `PUT /v1/users/{id}/lang_learn/settings` — 부분 갱신. 서버가 `exclude_unset` 으로
+ * 받으므로, 준 필드만 바뀌고 나머지는 그대로 남는다(`routes.py` 의 `LangLearnSettingsPatch`).
+ */
+export function putLangLearnSettings(
+  client: ApiClient,
+  userId: string,
+  patch: Partial<LangLearnSettings>,
+): Promise<LangLearnSettings> {
+  return request<LangLearnSettings>(client, `/v1/users/${encodeURIComponent(userId)}/lang_learn/settings`, {
+    method: 'PUT',
+    json: patch,
+  });
+}
+
 export interface LangLearnCloseInfo {
   code?: number;
   reason?: string;

@@ -46,10 +46,12 @@ import { ApiError, StreamError } from './src/api';
 import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
 import { FaceToFaceScreen } from './ui/FaceToFaceScreen';
+import { LangLearnSettingsScreen } from './ui/LangLearnSettingsScreen';
 import { LearnScreen } from './ui/LearnScreen';
 import { LiveScreen } from './ui/LiveScreen';
 import { LoginScreen } from './ui/LoginScreen';
 import type { LoggedInUser } from './ui/LoginScreen';
+import { onLangLearnNotificationPress } from './notifications';
 import { SettingsScreen } from './ui/SettingsScreen';
 import type { Settings } from './ui/settings';
 import * as storage from './storage';
@@ -93,15 +95,16 @@ function errorText(err: unknown): string {
  */
 type AppMode = 'translate' | 'interpret';
 
-type Tab = 'connect' | 'settings' | 'live' | 'login' | 'learn';
+type Tab = 'connect' | 'settings' | 'live' | 'login' | 'learnSettings' | 'learn';
 
 /** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
 const TABS: { id: Tab; label: string }[] = [
   { id: 'connect', label: '연결 확인' },
   { id: 'settings', label: '설정' },
   { id: 'live', label: '실시간 통역' },
-  // 언어 학습 계정·세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
+  // 언어 학습 계정·설정·세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
   { id: 'login', label: '학습 로그인' },
+  { id: 'learnSettings', label: '학습 설정' },
   { id: 'learn', label: '학습 세션' },
 ];
 
@@ -174,6 +177,11 @@ function Root({ isDark }: { isDark: boolean }) {
     if (!restored) return;
     storage.save({ serverUrl: baseUrl, apiKey, locale: LOCALE, form, user: user ?? undefined });
   }, [restored, baseUrl, apiKey, form, user]);
+
+  // 학습 알림을 탭하면(포그라운드든 콜드 스타트든) 학습 세션 화면으로 바로 들어간다
+  // (DESIGN.md §15 — "알림 탭 → 학습 세션 화면으로 진입"). 로그인이 안 돼 있으면
+  // LearnScreen 이 스스로 그 사실을 안내한다.
+  useEffect(() => onLangLearnNotificationPress(() => setTab('learn')), []);
 
   /** 세 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
   const makeClient = useCallback((): ApiClient | null => {
@@ -289,6 +297,9 @@ function Root({ isDark }: { isDark: boolean }) {
         )}
         {tab === 'login' && (
           <LoginScreen {...shared} user={user} onUser={setUser} />
+        )}
+        {tab === 'learnSettings' && (
+          <LangLearnSettingsScreen {...shared} user={user} config={config} onConfig={setConfig} />
         )}
         {tab === 'learn' && <LearnScreen {...shared} user={user} onConfig={setConfig} />}
       </View>
