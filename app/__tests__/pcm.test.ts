@@ -11,6 +11,8 @@
 
 import {
   decodeAudioChunk,
+  encodeBase64,
+  encodeWav,
   frameLevel,
   LinearResampler,
   PcmFramer,
@@ -145,6 +147,44 @@ describe('서버가 보낸 오디오 읽기', () => {
 
   test('헤더도 없고 sr 도 없으면 조용히 재생하지 않고 이유를 던진다', () => {
     expect(() => decodeAudioChunk(new Int16Array([1, 2]).buffer as ArrayBuffer, 0)).toThrow();
+  });
+});
+
+describe('답변 오디오 쓰기 (lang_learn/stt_training 이 음성 답변을 보낼 때)', () => {
+  test('encodeWav 가 감싼 것을 decodeAudioChunk 로 되돌리면 원래 샘플이 나온다', () => {
+    const samples = new Int16Array([0, 1000, -1000, 32767, -32768, 5]);
+    const wav = encodeWav(samples, 16000, 1);
+    const decoded = decodeAudioChunk(wav, 0);
+
+    expect(decoded.container).toBe('wav');
+    expect(decoded.sampleRate).toBe(16000);
+    expect(decoded.samples.length).toBe(samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+      expect(decoded.samples[i]).toBeCloseTo((samples[i] as number) / 0x8000, 4);
+    }
+  });
+
+  test('encodeBase64 는 표준 base64 와 같은 문자열을 낸다', () => {
+    // 기대값은 Node 의 Buffer.from(bytes).toString('base64') 로 미리 뽑아둔 것이다
+    // (이 파일은 tsconfig.json 의 감시를 받아 Node 타입/전역을 쓸 수 없다 — tsconfig.api.json
+    // 주석과 같은 이유로, 여기 __tests__ 도 그 설정이 본다).
+    const bytes = new Uint8Array([0, 1, 2, 253, 254, 255, 65, 66, 67]);
+    expect(encodeBase64(bytes.buffer as ArrayBuffer)).toBe('AAEC/f7/QUJD');
+  });
+
+  test('길이가 3의 배수가 아니어도(패딩 필요) 맞게 인코딩한다', () => {
+    const cases: [number, string][] = [
+      [1, 'AA=='],
+      [2, 'ACU='],
+      [3, 'ACVK'],
+      [4, 'ACVKbw=='],
+      [5, 'ACVKb5Q='],
+      [7, 'ACVKb5S53g=='],
+    ];
+    for (const [length, expected] of cases) {
+      const bytes = new Uint8Array(length).map((_, i) => (i * 37) % 256);
+      expect(encodeBase64(bytes.buffer as ArrayBuffer)).toBe(expected);
+    }
   });
 });
 

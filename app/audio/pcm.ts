@@ -279,6 +279,34 @@ function writeTag(view: DataView, at: number, fourCC: string): void {
   for (let i = 0; i < 4; i += 1) view.setUint8(at + i, fourCC.charCodeAt(i));
 }
 
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * 바이트를 base64 문자열로. RN 의 `btoa` 는 문자열(코드포인트 0~255)만 받고 이진 데이터를
+ * 직접 받지 않는다 — 그래서 여기서 직접 인코딩한다(이 파일이 이미 "이진 오디오 데이터를
+ * 다루는 곳"이라 `readWav`/`encodeWav` 옆에 둔다).
+ *
+ * `stt_training` 업로드(`ui/SttTrainingScreen.tsx`)가 WAV 를 JSON 본문에 실을 때 쓴다 —
+ * RN 의 `FormData` 는 메모리에 있는 바이너리를 직접 못 담고 파일 `uri` 만 받으므로
+ * (`src/api/stt_training.ts` 상단 주석 참고), multipart 대신 base64+JSON 을 쓴다.
+ */
+/* eslint-disable no-bitwise -- base64 인코딩 자체가 비트 연산이다. */
+export function encodeBase64(bytes: ArrayBuffer): string {
+  const view = new Uint8Array(bytes);
+  let out = '';
+  for (let i = 0; i < view.length; i += 3) {
+    const b0 = view[i] as number;
+    const b1 = i + 1 < view.length ? (view[i + 1] as number) : 0;
+    const b2 = i + 2 < view.length ? (view[i + 2] as number) : 0;
+    out += BASE64_CHARS[b0 >> 2];
+    out += BASE64_CHARS[((b0 & 0x03) << 4) | (b1 >> 4)];
+    out += i + 1 < view.length ? BASE64_CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] : '=';
+    out += i + 2 < view.length ? BASE64_CHARS[b2 & 0x3f] : '=';
+  }
+  return out;
+}
+/* eslint-enable no-bitwise */
+
 function tag(view: DataView, at: number): string {
   return String.fromCharCode(
     view.getUint8(at),

@@ -189,6 +189,8 @@ export interface ServerConfig {
   stream: StreamView;
   /** `lang_learn` 모듈이 얹는 섹션. 그 모듈이 붙어 있지 않은 서버에서는 없다. */
   lang_learn?: LangLearnConfigView;
+  /** `stt_training` 모듈이 얹는 섹션. 그 모듈이 붙어 있지 않은 서버에서는 없다. */
+  stt_training?: SttTrainingConfigView;
   [section: string]: unknown;
 }
 
@@ -610,3 +612,78 @@ export type LangLearnEvent =
 export type LangLearnEventType = LangLearnEvent['type'];
 
 export type LangLearnEventOf<K extends LangLearnEventType> = Extract<LangLearnEvent, { type: K }>;
+
+/* ---- stt_training: STT 개인화 데이터 수집 -----------------------------------
+ *
+ * 근거: `PLAN_STT_PERSONALIZATION.md` 0단계(0-S3/0-S4/0-S5/0-S6), `DESIGN.md` §16.
+ * ⚠️ 이 모듈은 아직 서버에 구현되지 않았다(2026-08-30 시점) — 아래 필드 이름은
+ * 계획서 문장을 따라 정한 **추정 계약**이다. 서버가 실제로 붙으면
+ * `MESSAGE_TO_SERVER.md`/`MESSAGE_TO_APP.md`로 맞춰보고 다르면 여기를 고친다.
+ */
+
+/** `/v1/config` 의 `stt_training` 섹션 — 언어 목록·목표 횟수를 하드코딩하지 않는다. */
+export interface SttTrainingConfigView {
+  languages: LanguageOption[];
+  required_read_count: number;
+  required_verify_count: number;
+}
+
+export interface SttTrainingProgress {
+  done: number;
+  required: number;
+}
+
+/** `GET /v1/users/{id}/stt_training/status`. */
+export interface SttTrainingStatus {
+  read: SttTrainingProgress;
+  verify: SttTrainingProgress;
+}
+
+/** `GET /v1/users/{id}/stt_training/next_prompt` — 목표를 채웠으면 `done:true` 만 온다. */
+export type SttTrainingNextPrompt =
+  | { done: true }
+  | { done: false; prompt_id: string; text: string; lang: string };
+
+/**
+ * `POST /v1/users/{id}/stt_training/read_sample` 요청.
+ *
+ * multipart 가 아니라 JSON+base64 다 — RN 의 `FormData` 는 메모리에 있는 바이너리를
+ * 직접 담지 못하고 파일 `uri` 만 받는다(`src/api/stt_training.ts` 상단 주석 참고).
+ * 서버의 `/v1/translate/text?with_audio=true` 응답이 이미 오디오를 base64 로 실어
+ * 보내는 것과 같은 관례라 요청 쪽에도 그대로 적용했다.
+ */
+export interface SttTrainingReadSampleRequest {
+  prompt_id: string;
+  audio_base64: string;
+  content_type: string;
+}
+
+/** `POST /v1/users/{id}/stt_training/read_sample` 응답 — 갱신된 낭독 진행도. */
+export interface SttTrainingReadSampleResponse {
+  read: SttTrainingProgress;
+}
+
+/** `POST /v1/users/{id}/stt_training/verify` 요청. 위와 같은 이유로 JSON+base64. */
+export interface SttTrainingVerifyRequest {
+  audio_base64: string;
+  content_type: string;
+}
+
+/** `POST /v1/users/{id}/stt_training/verify` 응답 — STT 인식 결과와, 판정에 쓸 id. */
+export interface SttTrainingVerifyResponse {
+  sample_id: string;
+  text: string;
+}
+
+/**
+ * `POST /v1/users/{id}/stt_training/verify/{sample_id}/verdict` 요청.
+ * `correct:false` 면 `corrected_text` 가 필수다 — 없이 보내면 서버가 400 으로 거절한다.
+ */
+export interface SttTrainingVerdictRequest {
+  correct: boolean;
+  corrected_text?: string;
+}
+
+export interface SttTrainingVerdictResponse {
+  verify: SttTrainingProgress;
+}

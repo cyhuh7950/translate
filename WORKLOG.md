@@ -2,6 +2,29 @@
 
 세션이 끊겨도 어디까지 했는지 알 수 있도록 남기는 기록. 최신 항목이 위.
 
+## 2026-08-30 (7)
+- STT 학습(개인화) 화면 시범 구현 — `PLAN_STT_PERSONALIZATION.md` 0단계 앱 작업
+  (0-A1~0-A4), 사용자 명시적 지시("작업 계획서 내용대로 개발을 진행하라")로 서버
+  API 확정 전에 미리 만들었다.
+  - `ui/SttTrainingScreen.tsx` — 낭독 교정/정오 판정 모드 전환, 진행률(read/verify
+    done/required) 표시, 녹음(기존 `audio/capture.ts` 재사용) → 업로드 → 결과 반영.
+  - `src/api/stt_training.ts` + `src/api/types.ts` 의 `SttTraining*` 타입 — 서버
+    API가 아직 없어 계획서 문장을 그대로 옮긴 **추정 계약**이라고 주석에 명시.
+  - **오디오는 multipart 가 아니라 JSON+base64 로 보낸다** — RN 의 `FormData` 는
+    메모리 바이너리를 못 담고 파일 `uri` 만 받는다는 것을 확인(`FormData.js` 소스
+    직접 확인)하고, 새 파일시스템 의존성 없이 `lang_learn` 의 base64 오디오 응답과
+    같은 관례로 우회했다. `audio/pcm.ts` 에 `encodeBase64` 추가(순수 함수, 의존성 없음).
+  - "STT 학습" 탭을 설정 팝업(⚙️)의 4번째 항목으로 추가 — 서버쪽 권고(학습 로그인과
+    같은 계정 단위 묶음, 학습 세션과는 목적이 다르다는 이유)를 따름.
+  - `__tests__/stt-training.test.tsx`, `__tests__/pcm.test.ts` 에 `encodeBase64`/
+    `encodeWav` 라운드트립 테스트 추가. `npm run verify` 전체 통과(12개 스위트,
+    85개 테스트).
+  - 실기기(SM-N981N) + 실서버 확인: 화면 정상 렌더, 로그인 상태 유지, 탭 표시
+    글자/아이콘 전환 정상, **서버 API가 없어서 실제로 404 오류가 뜨는 것까지 정상
+    확인**(앱이 문구를 지어내지 않고 서버 오류를 그대로 보여주는 원칙 그대로 동작).
+- MESSAGE_TO_SERVER.md 갱신 예정 — 앱쪽 구현 완료, 서버 API(0-S3/0-S4/0-S5/0-S6)
+  나오면 바로 연동 확인 가능하다고 전달할 것.
+
 ## 2026-08-30 (6)
 - 연결 확인 화면(`ConnectScreen.tsx`)의 "결과" 상자를 기본으로 접어둔다 — 조회
   버튼을 누를 때마다 서버 정보(엔진 수·마이크 규격 등)가 바로 펼쳐지던 것을

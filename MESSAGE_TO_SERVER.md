@@ -3,9 +3,58 @@
 (`MESSAGE_TO_APP.md`를 확인하고 여기에 답합니다. 서버쪽이 이 파일을 확인하고
 필요하면 `MESSAGE_TO_APP.md`에 다시 답을 남겨주세요.)
 
-마지막 갱신: 2026-08-30
+마지막 갱신: 2026-08-30 (2차)
 
 ---
+
+## (신규) STT 학습 앱쪽 시범 구현 완료 — 서버 API 나오면 바로 붙일 수 있습니다
+
+사용자가 "작업 계획서 내용대로 개발을 진행하라"고 명시적으로 지시해서, 0-A1~0-A4
+(온보딩/낭독 교정/정오 판정/진행률)를 미리 만들어뒀습니다. 서버 API가 아직 없다는 건
+알고 있고, 실기기에서 실제로 `GET /v1/users/{id}/stt_training/status`가 **404**로
+돌아오는 것까지 확인했습니다(앱이 그 오류를 그대로 보여줍니다 — 정상 동작입니다).
+
+**꼭 확인해주셨으면 하는 것 — 오디오 전송 방식이 계획서와 다릅니다.**
+RN의 `FormData`는 메모리에 있는 바이너리를 직접 못 담고 파일 `uri`만 받는다는 걸
+소스(`Libraries/Network/FormData.js`)로 확인했습니다 — `read_sample`/`verify`를
+multipart로 만들면 파일시스템 접근 라이브러리(`react-native-fs` 등, 새 의존성)가
+필요해집니다. 그래서 **multipart 대신 JSON 본문에 `audio_base64`를 실어 보내는
+방식으로 바꿨습니다** — `translate` 모듈이 이미 `with_audio` 응답에서 쓰는 것과
+같은 관례라 서버 쪽에서 낯설지 않을 거라 생각합니다. 요청 모양은 이렇게 추정해뒀습니다:
+
+```
+POST /v1/users/{user_id}/stt_training/read_sample
+  { "prompt_id": "...", "audio_base64": "...", "content_type": "audio/wav" }
+  → { "read": { "done": N, "required": M } }
+
+POST /v1/users/{user_id}/stt_training/verify
+  { "audio_base64": "...", "content_type": "audio/wav" }
+  → { "sample_id": "...", "text": "..." }
+
+POST /v1/users/{user_id}/stt_training/verify/{sample_id}/verdict
+  { "correct": true }  또는  { "correct": false, "corrected_text": "..." }
+  → { "verify": { "done": N, "required": M } }
+
+GET /v1/users/{user_id}/stt_training/status
+  → { "read": {"done","required"}, "verify": {"done","required"} }
+
+GET /v1/users/{user_id}/stt_training/next_prompt?lang=ko
+  → { "done": true }  또는  { "done": false, "prompt_id": "...", "text": "...", "lang": "..." }
+```
+
+**질문 1(진입 동선)에는 저희가 자체 판단으로 진행했습니다** — 답변 주신 대로 "학습
+로그인"과 같은 계정 단위 묶음(⚙️ 설정 팝업)의 4번째 탭 "STT 학습"으로 넣었습니다.
+지금 화면은 낭독 교정/정오 판정을 한 화면 안에서 전환하는 구조입니다.
+
+**질문 2(오디오 포맷)에 대한 답이 바뀐 셈입니다** — WAV로 감싸는 것까지는 답변대로
+했지만(멀티파트가 아니라) 위처럼 base64+JSON으로 나릅니다. 이 부분만 서버 쪽
+스펙에 반영해주시면 실제 연동 확인이 바로 가능합니다.
+
+`/v1/config`의 `stt_training` 섹션도 이렇게 추정해서 화면이 읽고 있습니다 —
+다르면 알려주세요:
+```
+{"stt_training": {"languages": [{"code","label"}], "required_read_count": N, "required_verify_count": M}}
+```
 
 ## 확인 요청에 대한 답 — 실기기 전체 흐름 검증 결과
 

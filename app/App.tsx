@@ -54,6 +54,7 @@ import { LoginScreen } from './ui/LoginScreen';
 import type { LoggedInUser } from './ui/LoginScreen';
 import { onLangLearnNotificationPress } from './notifications';
 import { SettingsScreen } from './ui/SettingsScreen';
+import { SttTrainingScreen } from './ui/SttTrainingScreen';
 import type { Settings } from './ui/settings';
 import * as storage from './storage';
 import { dark, light, ui } from './ui/theme';
@@ -102,7 +103,7 @@ type AppMode = 'translate' | 'interpret';
  * 다 욱여넣으면 글자가 두 줄로 깨진다(실기기 실측).
  */
 type FeatureTab = 'connect' | 'live' | 'learn';
-type SettingsTab = 'settings' | 'learnSettings' | 'login';
+type SettingsTab = 'settings' | 'learnSettings' | 'login' | 'sttTraining';
 
 /** 탭 표시 방식. 아이콘은 새 의존성 없이 이모지로 그린다. */
 type TabDisplay = 'text' | 'icon';
@@ -126,6 +127,9 @@ const SETTINGS_TABS: TabMeta<SettingsTab>[] = [
   { id: 'settings', label: '번역 설정', icon: '🌐' },
   { id: 'learnSettings', label: '학습 설정', icon: '🎛️' },
   { id: 'login', label: '학습 로그인', icon: '👤' },
+  // 계정 단위 화면이라 학습 로그인과 같은 묶음에 둔다(서버쪽 권고,
+  // MESSAGE_TO_APP.md 2026-08-30 2차 답변) — 언어학습(학습 세션)과는 목적이 다르다.
+  { id: 'sttTraining', label: 'STT 학습', icon: '🗣️' },
 ];
 
 function App() {
@@ -248,6 +252,9 @@ function Root({ isDark }: { isDark: boolean }) {
     }
     if (settingsTab === 'login') {
       return <LoginScreen {...shared} user={user} onUser={setUser} />;
+    }
+    if (settingsTab === 'sttTraining') {
+      return <SttTrainingScreen {...shared} user={user} config={config} onConfig={setConfig} />;
     }
     return null;
   }
