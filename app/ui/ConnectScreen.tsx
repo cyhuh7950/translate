@@ -20,7 +20,7 @@
  */
 
 import { useState } from 'react';
-import { ActivityIndicator, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { availableProfiles, fetchConfig, readyEngines, translateText } from '../src/api';
 import type { ApiClient, ServerConfig } from '../src/api';
@@ -55,6 +55,8 @@ export function ConnectScreen({
   const [busy, setBusy] = useState<'config' | 'translate' | null>(null);
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
+  /** 결과 상자는 기본으로 접혀 있다 — 보고 싶을 때만 편다. */
+  const [showResult, setShowResult] = useState(false);
 
   function begin(which: 'config' | 'translate'): ApiClient | null {
     if (busy) return null;
@@ -183,8 +185,15 @@ export function ConnectScreen({
       )}
 
       {result !== '' && (
+        <Pressable onPress={() => setShowResult(v => !v)} style={styles.toggle}>
+          <Text style={[ui.boxTitle, { color: colors.dim }]}>
+            {showResult ? '결과 접기 ▲' : '결과 보기 ▼'}
+          </Text>
+        </Pressable>
+      )}
+
+      {result !== '' && showResult && (
         <View style={[ui.box, { borderColor: colors.border, backgroundColor: colors.field }]}>
-          <Text style={[ui.boxTitle, { color: colors.dim }]}>결과</Text>
           <Text style={[ui.mono, { color: colors.fg }]} selectable>
             {result}
           </Text>
@@ -193,3 +202,7 @@ export function ConnectScreen({
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  toggle: { marginTop: 16, paddingVertical: 4 },
+});
