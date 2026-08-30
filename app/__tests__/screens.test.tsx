@@ -253,13 +253,41 @@ describe('화면 렌더', () => {
         node => node.props?.label === label && typeof node.props?.onPress === 'function',
       )[0];
 
-    for (const label of ['설정', '실시간 통역']) {
+    for (const label of ['설정', '실시간 통역', '학습 로그인']) {
       const button = tab(label);
       expect(button).toBeDefined();
       await ReactTestRenderer.act(() => {
         button!.props.onPress();
       });
     }
+  });
+
+  it('통역모드로 넘기면 FaceToFaceScreen이 그려지고, 번역모드로 되돌아온다', async () => {
+    let tree: ReactTestRenderer.ReactTestRenderer | undefined;
+    await ReactTestRenderer.act(() => {
+      tree = ReactTestRenderer.create(<App />);
+    });
+
+    const modeButton = (label: string) =>
+      tree!.root.findAll(
+        node => node.props?.label === label && typeof node.props?.onPress === 'function',
+      )[0];
+
+    await ReactTestRenderer.act(() => {
+      modeButton('통역모드').props.onPress();
+    });
+    // 통역모드에서는 탭 바(예: '설정')가 사라지고 언어설정 바가 있어야 한다.
+    expect(tree!.root.findAll(n => n.props?.label === '설정')).toHaveLength(0);
+    expect(
+      tree!.root.findAll(
+        n => typeof n.props?.children === 'string' && String(n.props.children).includes('언어설정'),
+      ),
+    ).not.toHaveLength(0);
+
+    await ReactTestRenderer.act(() => {
+      modeButton('번역모드').props.onPress();
+    });
+    expect(modeButton('설정')).toBeDefined();
   });
 });
 

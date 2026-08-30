@@ -35,6 +35,11 @@ export interface Saved {
   locale?: string;
   /** 설정 화면에서 고른 값 (`ui/settings.ts` 의 `Settings`). */
   form?: Record<string, string>;
+  /**
+   * 언어 학습 계정 (`DESIGN.md` §15). PIN 은 남기지 않는다 — 로그인 때만 쓰고 버린다.
+   * 남기는 것은 이후 요청에 실어 보낼 `user_id` 와, 화면에 보여줄 이름뿐이다.
+   */
+  user?: { id: string; name: string };
 }
 
 /**

@@ -14,6 +14,16 @@
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!--
+      언어 학습 알림 (DESIGN.md §15) — @notifee/react-native 로 기기가 스스로 예약한다
+      (서버 푸시 없음). Android 13(API 33) 이상은 이 권한을 런타임에도 물어야 뜬다
+      (notifications.ts 의 ensurePermission). 정확한 시각을 요구하지 않으므로
+      SCHEDULE_EXACT_ALARM 은 넣지 않았다 — 기본 트리거로 몇 분 밀리는 것은 감내한다.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 재부팅 후에도 예약이 살아남게 한다 (notifee가 제공하는 부팅 리시버). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
       android:name=".MainApplication"
       android:label="@string/app_name"

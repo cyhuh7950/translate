@@ -45,7 +45,10 @@ import appConfig from './app.config.json';
 import { ApiError, StreamError } from './src/api';
 import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
+import { FaceToFaceScreen } from './ui/FaceToFaceScreen';
 import { LiveScreen } from './ui/LiveScreen';
+import { LoginScreen } from './ui/LoginScreen';
+import type { LoggedInUser } from './ui/LoginScreen';
 import { SettingsScreen } from './ui/SettingsScreen';
 import type { Settings } from './ui/settings';
 import * as storage from './storage';
@@ -82,13 +85,22 @@ function errorText(err: unknown): string {
   return String(err);
 }
 
-type Tab = 'connect' | 'settings' | 'live';
+/**
+ * 앱 최상단 모드. 번역모드는 지금까지의 화면 그대로고, 통역모드는 마주 보고 쓰는
+ * `FaceToFaceScreen` 하나뿐이다 — 그 화면은 화면 전체를 차지해야 해서(위/아래 반씩)
+ * 탭·서버 주소 입력이 함께 있는 스크롤 레이아웃과 같이 두지 않는다.
+ */
+type AppMode = 'translate' | 'interpret';
+
+type Tab = 'connect' | 'settings' | 'live' | 'login';
 
 /** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
 const TABS: { id: Tab; label: string }[] = [
   { id: 'connect', label: '연결 확인' },
   { id: 'settings', label: '설정' },
   { id: 'live', label: '실시간 통역' },
+  // 언어 학습 계정 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
+  { id: 'login', label: '학습 로그인' },
 ];
 
 function App() {
@@ -105,6 +117,7 @@ function Root({ isDark }: { isDark: boolean }) {
   const insets = useSafeAreaInsets();
   const colors = isDark ? dark : light;
 
+  const [mode, setMode] = useState<AppMode>('translate');
   const [tab, setTab] = useState<Tab>('connect');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
@@ -122,6 +135,8 @@ function Root({ isDark }: { isDark: boolean }) {
   // 실시간 화면도 같은 것을 본다(고른 모델이 세션에 실려야 하므로).
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [form, setForm] = useState<Settings>({});
+  /** 언어 학습 계정 (`ui/LoginScreen.tsx`). 로그인 안 했으면 null — 번역 기능은 그대로 쓴다. */
+  const [user, setUser] = useState<LoggedInUser | null>(null);
 
   /**
    * 기기에 남겨둔 값을 한 번 읽어온다.
@@ -139,6 +154,7 @@ function Root({ isDark }: { isDark: boolean }) {
       if (saved.serverUrl !== undefined) setBaseUrl(saved.serverUrl);
       if (saved.apiKey !== undefined) setApiKey(saved.apiKey);
       if (saved.form !== undefined) setForm(saved.form);
+      if (saved.user !== undefined) setUser(saved.user);
       setRestored(true);
     });
     return () => {
@@ -154,8 +170,8 @@ function Root({ isDark }: { isDark: boolean }) {
    */
   useEffect(() => {
     if (!restored) return;
-    storage.save({ serverUrl: baseUrl, apiKey, locale: LOCALE, form });
-  }, [restored, baseUrl, apiKey, form]);
+    storage.save({ serverUrl: baseUrl, apiKey, locale: LOCALE, form, user: user ?? undefined });
+  }, [restored, baseUrl, apiKey, form, user]);
 
   /** 세 화면이 같은 주소·키를 쓴다. 주소가 비어 있으면 null 이다. */
   const makeClient = useCallback((): ApiClient | null => {
@@ -170,6 +186,37 @@ function Root({ isDark }: { isDark: boolean }) {
   const shared = { colors, makeClient, locale: LOCALE, errorText };
   const active = TABS.find(t => t.id === tab);
 
+  function modeSwitch(topPadding: number) {
+    return (
+      <View style={[styles.modeSwitch, { paddingTop: topPadding }]}>
+        <ModeButton
+          label="번역모드"
+          active={mode === 'translate'}
+          onPress={() => setMode('translate')}
+          colors={colors}
+        />
+        <ModeButton
+          label="통역모드"
+          active={mode === 'interpret'}
+          onPress={() => setMode('interpret')}
+          colors={colors}
+        />
+      </View>
+    );
+  }
+
+  // 통역모드는 화면 전체(위/아래 반씩)를 쓴다 — 스크롤·탭·주소 입력과 같이 두지 않는다.
+  if (mode === 'interpret') {
+    return (
+      <View style={[styles.interpretRoot, { backgroundColor: colors.bg }]}>
+        {modeSwitch(insets.top + 12)}
+        <View style={styles.interpretBody}>
+          <FaceToFaceScreen {...shared} onConfig={setConfig} form={form} models={models} />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <ScrollView
       style={[ui.root, { backgroundColor: colors.bg }]}
@@ -178,6 +225,8 @@ function Root({ isDark }: { isDark: boolean }) {
         { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
       ]}
       keyboardShouldPersistTaps="handled">
+      {modeSwitch(0)}
+
       <Text style={[ui.title, { color: colors.fg }]}>
         {active ? active.label : ''}
       </Text>
@@ -236,8 +285,41 @@ function Root({ isDark }: { isDark: boolean }) {
         {tab === 'live' && (
           <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />
         )}
+        {tab === 'login' && (
+          <LoginScreen {...shared} user={user} onUser={setUser} />
+        )}
       </View>
     </ScrollView>
+  );
+}
+
+/** 번역모드/통역모드 전환. `TabButton` 과 모양은 같지만 최상단 모드라 따로 둔다. */
+function ModeButton({
+  label,
+  active,
+  onPress,
+  colors,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  colors: Palette;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.tab,
+        {
+          borderColor: active ? colors.accent : colors.border,
+          backgroundColor: active ? colors.accent : 'transparent',
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}>
+      <Text style={[styles.tabText, active ? styles.tabTextOn : { color: colors.dim }]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -277,6 +359,9 @@ const styles = StyleSheet.create({
   tabText: { fontSize: 14, fontWeight: '600' },
   tabTextOn: { color: '#ffffff' },
   screen: { marginTop: 4 },
+  modeSwitch: { flexDirection: 'row', gap: 8, paddingHorizontal: 20 },
+  interpretRoot: { flex: 1 },
+  interpretBody: { flex: 1, marginTop: 8 },
 });
 
 export default App;
