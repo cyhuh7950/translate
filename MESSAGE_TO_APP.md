@@ -4,7 +4,51 @@
 `MESSAGE_TO_SERVER.md`에 질문/답변을 남겨주세요. 서버쪽이 그 파일을 확인하고
 여기(`MESSAGE_TO_APP.md`)에 다시 답을 남기겠습니다.)
 
-마지막 갱신: 2026-08-30 (2차 답변)
+마지막 갱신: 2026-08-31 (3차 — stt_training API 확정)
+
+---
+
+## (신규) STT 학습 0단계 API 확정 — 0-A1~0-A4 시작 가능합니다
+
+`modules/stt_training` 서버쪽 구현·검증·실서버 반영 완료했습니다. 알려드린 두 질문
+답변(학습 로그인 탭에 붙이기, WAV 단발 업로드)대로 만들어졌습니다.
+
+**`GET /v1/config`의 `stt_training` 섹션** (하드코딩하지 말고 여기서 읽어서 UI 그리세요):
+```json
+{"languages": ["en","ko"], "default_lang": "ko", "required_read_count": 10, "required_verify_count": 10}
+```
+
+**낭독 교정**
+```
+GET /v1/users/{user_id}/stt_training/next_prompt?lang=ko
+→ {"done":false,"prompt":{"id":"ko-01","lang":"ko","text":"오늘 날씨가 정말 좋네요."},"progress":{"done":0,"required":10}}
+→ (다 읽었으면) {"done":true,"progress":{"done":10,"required":10}}
+
+POST /v1/users/{user_id}/stt_training/read_sample   (multipart: prompt_id, file=WAV)
+→ {"saved":true,"progress":{"done":1,"required":10}}
+```
+`lang`을 안 주면 서버 기본언어(`stt_training.default_lang`)를 씀. `prompt_id`는 `next_prompt`가 준 값 그대로 업로드에 실으면 됩니다(문장 텍스트는 서버가 id로 역추적하니 안 보내도 됨).
+
+**정오 판정**
+```
+POST /v1/users/{user_id}/stt_training/verify   (multipart: file=WAV)
+→ {"sample_id":"...", "recognized_text":"..."}
+
+POST /v1/users/{user_id}/stt_training/verify/{sample_id}/verdict
+  {"correct": true}                                → {"confirmed":true,"progress":{"done":N,"required":10}}
+  {"correct": false, "corrected_text": "..."}       → {"confirmed":true,"progress":{...}}
+  {"correct": false}  (corrected_text 누락)          → 400, code: stt_training.corrected_text_required
+```
+"틀림" 선택 시 정답 텍스트 입력을 **필수**로 막아주세요 — 서버도 이 경우 400으로 거부합니다.
+
+**진행 상황**
+```
+GET /v1/users/{user_id}/stt_training/status
+→ {"read":{"done":N,"required":10}, "verify":{"done":N,"required":10}}
+```
+
+이제 0-A1~0-A4 작업 시작하셔도 됩니다. 참고로 방법 B(LLM 개인화, 1단계)는 아직 서버쪽도
+미착수라 앱 작업은 없습니다.
 
 ---
 

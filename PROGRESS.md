@@ -4,7 +4,7 @@
 어디까지 됐는지"의 스냅샷이다. 세션이 도중에 끊겨도 여기부터 다시 상황을 파악할 수 있게,
 마일스톤이 바뀔 때마다 갱신하고 바로 커밋·push한다.
 
-마지막 갱신: 2026-08-30
+마지막 갱신: 2026-08-31
 
 ---
 
@@ -63,8 +63,13 @@ session.done)까지 전부 정상 확인. `show_text_for_repeat=false` 설정도
 개선이 아니라, 등록해서 자기 음성 데이터를 제공한 사람 한 명만을 위한 개인화**. 설계는
 `DESIGN.md` §16, 작업 계획은 `PLAN_STT_PERSONALIZATION.md`.
 
-- **0단계**: 데이터 수집(`modules/stt_training` — 낭독교정 + 정오판정+교정텍스트)
-- **1단계(우선)**: 방법 B — LLM 문맥 활용 개인화(오디오직결 LLM + 개인화 힌트)
+- **0단계**: 데이터 수집(`modules/stt_training` — 낭독교정 + 정오판정+교정텍스트) —
+  **완료, main 병합·실서버 반영 완료 (커밋 `3b69392`, 병합 `0ec771e`, 2026-08-31)**.
+  API: `GET .../next_prompt`, `POST .../read_sample`, `POST .../verify`,
+  `POST .../verify/{id}/verdict`, `GET .../status`. `/v1/config`의 `stt_training`
+  섹션도 실서버에서 확인(languages: en/ko, 목표 개수 10/10). 회귀 확인 완료
+  (화자등록/사용자/lang_learn/번역 API 정상).
+- **1단계(우선)**: 방법 B — LLM 문맥 활용 개인화(오디오직결 LLM + 개인화 힌트) — 아직 미착수
 - **2단계(장기)**: 방법 A — 실제 파인튜닝. `translate`는 데이터 내보내기·사용자별 엔진
   라우팅만 맡고, 실제 학습·서빙은 `voice` 저장소(또는 외부 임대 서버) 쪽 — 누가 할지 미정
 
@@ -82,9 +87,11 @@ session.done)까지 전부 정상 확인. `show_text_for_repeat=false` 설정도
 
 ## 다음에 할 일
 
-- **개발 재개는 사용자 승인 필요** — 아래 둘 다 설계만 된 상태:
-  1. 번역 세션 이력(user_id, 전체 원문/번역문) — 재작업 필요, `PLAN_LANG_LEARN.md`
-     서버 작업 2번 후속
-  2. STT 개선 0단계(`modules/stt_training`) — `PLAN_STT_PERSONALIZATION.md`
-- 앱쪽 세션과 연결이 복구되면: 언어학습 전체 흐름 실기기 검증 결과 확인
-- 앱쪽에 `PLAN_STT_PERSONALIZATION.md`의 0-A/1-A(앱 작업 항목) 전달 필요
+- **개발 재개는 사용자 승인 필요**:
+  1. 번역 세션 이력(user_id, 전체 원문/번역문) — 설계만 된 상태, 재작업 필요
+     (`PLAN_LANG_LEARN.md` 서버 작업 2번 후속)
+  2. ~~STT 개선 0단계~~ → **완료**, 이제 1단계(방법 B, LLM 개인화) 착수 여부 결정 필요
+- 앱쪽에 `stt_training` 0단계 API 스펙 전달함(`MESSAGE_TO_APP.md`) — 0-A1~0-A4 작업 시작 가능
+- 5개 agent 동시 사고 이후 `feature/stt-training`(빈 브랜치, 워크트리에 물려있어 삭제
+  안 됨)와 `feature/translate-history`(stash `concurrent-agent-mixup-2026-08-30` 보유,
+  미검증) 잔재가 남아있음 — 무해하지만 나중에 정리 필요
