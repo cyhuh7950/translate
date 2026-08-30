@@ -3,6 +3,7 @@
 
     GET  /v1/users/{user_id}/lang_learn/settings   학습 설정 조회 (없으면 기본값)
     PUT  /v1/users/{user_id}/lang_learn/settings   학습 설정 갱신 (부분 갱신)
+    GET  /v1/users/{user_id}/lang_learn/history    과거 학습 세션 이력 조회 (최신순)
     WS   {lang_learn.stream.path}                  학습 세션
 
 인증은 이 모듈이 정하지 않는다 — `translate` 모듈과 같은 규칙(`ctx.auth`,
@@ -67,6 +68,18 @@ def build(
     async def put_settings(user_id: str, patch: LangLearnSettingsPatch) -> dict:
         ctx.reload_if_changed()
         return settings.update(user_id, patch.model_dump(exclude_unset=True))
+
+    @router.get(
+        "/v1/users/{user_id}/lang_learn/history",
+        summary="List a user's past language-learning sessions (most recent first)",
+        dependencies=[auth],
+    )
+    async def get_history(user_id: str) -> dict:
+        """No matching sessions is not an error — this returns an empty list."""
+        ctx.reload_if_changed()
+        sessions = history.list(user_id=user_id)
+        sessions_public = [s.public() for s in reversed(sessions)]
+        return {"user_id": user_id, "count": len(sessions_public), "sessions": sessions_public}
 
     @router.websocket(ctx.config.get("lang_learn.stream.path"))
     async def stream(ws: WebSocket) -> None:
