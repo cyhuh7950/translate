@@ -30,6 +30,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Modal,
   Pressable,
   ScrollView,
   StatusBar,
@@ -95,17 +96,36 @@ function errorText(err: unknown): string {
  */
 type AppMode = 'translate' | 'interpret';
 
-type Tab = 'connect' | 'settings' | 'live' | 'login' | 'learnSettings' | 'learn';
+/**
+ * 탭을 "기능"과 "설정"으로 가른다. 기능은 메인 화면에 그대로 두고(고르는 일이 잦다),
+ * 설정은 한데 모아 별도 팝업(⚙️ 버튼 → `Modal`)에서 처리한다 — 여섯 개를 한 줄에
+ * 다 욱여넣으면 글자가 두 줄로 깨진다(실기기 실측).
+ */
+type FeatureTab = 'connect' | 'live' | 'learn';
+type SettingsTab = 'settings' | 'learnSettings' | 'login';
+
+/** 탭 표시 방식. 아이콘은 새 의존성 없이 이모지로 그린다. */
+type TabDisplay = 'text' | 'icon';
+
+interface TabMeta<T extends string> {
+  id: T;
+  label: string;
+  /** 이모지 하나. `tabDisplay==='icon'` 일 때 label 대신 이걸 쓴다. */
+  icon: string;
+}
 
 /** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'connect', label: '연결 확인' },
-  { id: 'settings', label: '설정' },
-  { id: 'live', label: '실시간 통역' },
-  // 언어 학습 계정·설정·세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
-  { id: 'login', label: '학습 로그인' },
-  { id: 'learnSettings', label: '학습 설정' },
-  { id: 'learn', label: '학습 세션' },
+const FEATURE_TABS: TabMeta<FeatureTab>[] = [
+  { id: 'connect', label: '연결 확인', icon: '🔌' },
+  { id: 'live', label: '실시간 통역', icon: '🎙️' },
+  // 언어 학습 세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
+  { id: 'learn', label: '학습 세션', icon: '📝' },
+];
+
+const SETTINGS_TABS: TabMeta<SettingsTab>[] = [
+  { id: 'settings', label: '번역 설정', icon: '🌐' },
+  { id: 'learnSettings', label: '학습 설정', icon: '🎛️' },
+  { id: 'login', label: '학습 로그인', icon: '👤' },
 ];
 
 function App() {
@@ -123,7 +143,10 @@ function Root({ isDark }: { isDark: boolean }) {
   const colors = isDark ? dark : light;
 
   const [mode, setMode] = useState<AppMode>('translate');
-  const [tab, setTab] = useState<Tab>('connect');
+  const [tab, setTab] = useState<FeatureTab>('connect');
+  /** ⚙️ 버튼으로 여는 설정 팝업. 열려 있지 않으면 null, 열려 있으면 그 안의 활성 탭. */
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [tabDisplay, setTabDisplay] = useState<TabDisplay>('text');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
 
@@ -160,6 +183,7 @@ function Root({ isDark }: { isDark: boolean }) {
       if (saved.apiKey !== undefined) setApiKey(saved.apiKey);
       if (saved.form !== undefined) setForm(saved.form);
       if (saved.user !== undefined) setUser(saved.user);
+      if (saved.tabDisplay !== undefined) setTabDisplay(saved.tabDisplay);
       setRestored(true);
     });
     return () => {
@@ -175,8 +199,15 @@ function Root({ isDark }: { isDark: boolean }) {
    */
   useEffect(() => {
     if (!restored) return;
-    storage.save({ serverUrl: baseUrl, apiKey, locale: LOCALE, form, user: user ?? undefined });
-  }, [restored, baseUrl, apiKey, form, user]);
+    storage.save({
+      serverUrl: baseUrl,
+      apiKey,
+      locale: LOCALE,
+      form,
+      user: user ?? undefined,
+      tabDisplay,
+    });
+  }, [restored, baseUrl, apiKey, form, user, tabDisplay]);
 
   // 학습 알림을 탭하면(포그라운드든 콜드 스타트든) 학습 세션 화면으로 바로 들어간다
   // (DESIGN.md §15 — "알림 탭 → 학습 세션 화면으로 진입"). 로그인이 안 돼 있으면
@@ -194,7 +225,32 @@ function Root({ isDark }: { isDark: boolean }) {
   }, [baseUrl, apiKey]);
 
   const shared = { colors, makeClient, locale: LOCALE, errorText };
-  const active = TABS.find(t => t.id === tab);
+  const active = FEATURE_TABS.find(t => t.id === tab);
+  const activeSettings = SETTINGS_TABS.find(t => t.id === settingsTab);
+
+  /** 설정 팝업 안에서 고른 화면 하나. `tab === null` 이면(팝업이 처음 열리기 전) 아무것도 없다. */
+  function renderSettingsScreen() {
+    if (settingsTab === 'settings') {
+      return (
+        <SettingsScreen
+          {...shared}
+          config={config}
+          onConfig={setConfig}
+          models={models}
+          onModels={setModels}
+          form={form}
+          onForm={setForm}
+        />
+      );
+    }
+    if (settingsTab === 'learnSettings') {
+      return <LangLearnSettingsScreen {...shared} user={user} config={config} onConfig={setConfig} />;
+    }
+    if (settingsTab === 'login') {
+      return <LoginScreen {...shared} user={user} onUser={setUser} />;
+    }
+    return null;
+  }
 
   function modeSwitch(topPadding: number) {
     return (
@@ -242,15 +298,25 @@ function Root({ isDark }: { isDark: boolean }) {
       </Text>
 
       <View style={styles.tabs}>
-        {TABS.map(t => (
+        {FEATURE_TABS.map(t => (
           <TabButton
             key={t.id}
-            label={t.label}
+            meta={t}
+            display={tabDisplay}
             active={tab === t.id}
             onPress={() => setTab(t.id)}
             colors={colors}
           />
         ))}
+        {/* 설정 세 개(번역 설정·학습 설정·학습 로그인)는 여기 모아 팝업으로 연다 —
+            메인 탭 줄에 다 넣으면 여섯 개라 글자가 두 줄로 깨진다. */}
+        <TabButton
+          meta={{ label: '설정', icon: '⚙️' }}
+          display={tabDisplay}
+          active={false}
+          onPress={() => setSettingsTab(prev => prev ?? 'settings')}
+          colors={colors}
+        />
       </View>
 
       <Text style={[ui.label, { color: colors.dim }]}>서버 주소</Text>
@@ -281,28 +347,63 @@ function Root({ isDark }: { isDark: boolean }) {
         {tab === 'connect' && (
           <ConnectScreen {...shared} config={config} onConfig={setConfig} form={form} />
         )}
-        {tab === 'settings' && (
-          <SettingsScreen
-            {...shared}
-            config={config}
-            onConfig={setConfig}
-            models={models}
-            onModels={setModels}
-            form={form}
-            onForm={setForm}
-          />
-        )}
         {tab === 'live' && (
           <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />
         )}
-        {tab === 'login' && (
-          <LoginScreen {...shared} user={user} onUser={setUser} />
-        )}
-        {tab === 'learnSettings' && (
-          <LangLearnSettingsScreen {...shared} user={user} config={config} onConfig={setConfig} />
-        )}
         {tab === 'learn' && <LearnScreen {...shared} user={user} onConfig={setConfig} />}
       </View>
+
+      <Modal
+        visible={settingsTab !== null}
+        animationType="slide"
+        onRequestClose={() => setSettingsTab(null)}>
+        <View style={[styles.modalRoot, { backgroundColor: colors.bg, paddingTop: insets.top + 16 }]}>
+          <ScrollView contentContainerStyle={ui.content} keyboardShouldPersistTaps="handled">
+            <View style={styles.modalHeader}>
+              <Text style={[ui.title, { color: colors.fg }]}>
+                {activeSettings ? activeSettings.label : '설정'}
+              </Text>
+              <Pressable onPress={() => setSettingsTab(null)} style={styles.closeButton}>
+                <Text style={[styles.closeText, { color: colors.dim }]}>닫기 ✕</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.tabs}>
+              {SETTINGS_TABS.map(t => (
+                <TabButton
+                  key={t.id}
+                  meta={t}
+                  display={tabDisplay}
+                  active={settingsTab === t.id}
+                  onPress={() => setSettingsTab(t.id)}
+                  colors={colors}
+                />
+              ))}
+            </View>
+
+            {/* 탭 표시 방식 — 글자/아이콘. 메인 탭·이 팝업 탭 둘 다에 적용된다. */}
+            <View style={styles.displayRow}>
+              <Text style={[ui.label, styles.displayLabel, { color: colors.dim }]}>탭 표시</Text>
+              <View style={styles.displayChips}>
+                <DisplayChip
+                  label="글자"
+                  active={tabDisplay === 'text'}
+                  onPress={() => setTabDisplay('text')}
+                  colors={colors}
+                />
+                <DisplayChip
+                  label="아이콘"
+                  active={tabDisplay === 'icon'}
+                  onPress={() => setTabDisplay('icon')}
+                  colors={colors}
+                />
+              </View>
+            </View>
+
+            <View style={styles.screen}>{renderSettingsScreen()}</View>
+          </ScrollView>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -337,14 +438,22 @@ function ModeButton({
   );
 }
 
-/** 화면 전환 탭. 네비게이션 라이브러리 대신 쓰는 토글이다. */
+/**
+ * 화면 전환 탭. 네비게이션 라이브러리 대신 쓰는 토글이다.
+ *
+ * `tabDisplay==='icon'` 이면 글자 대신 이모지 하나만 그린다 — 탭이 여섯 개일 때 글자가
+ * 두 줄로 깨지던 것(실기기 실측)을 피하는 용도라, 아이콘 모드에서는 글씨를 아예 안 쓴다.
+ * 글자 모드에서도 크기를 12로 줄여 좁은 폭에서 덜 깨지게 한다.
+ */
 function TabButton({
-  label,
+  meta,
+  display,
   active,
   onPress,
   colors,
 }: {
-  label: string;
+  meta: { label: string; icon: string };
+  display: TabDisplay;
   active: boolean;
   onPress: () => void;
   colors: Palette;
@@ -360,22 +469,65 @@ function TabButton({
           opacity: pressed ? 0.7 : 1,
         },
       ]}>
-      <Text style={[styles.tabText, active ? styles.tabTextOn : { color: colors.dim }]}>
-        {label}
+      <Text
+        style={[
+          display === 'icon' ? styles.tabIcon : styles.tabText,
+          active ? styles.tabTextOn : { color: colors.dim },
+        ]}
+        numberOfLines={display === 'icon' ? 1 : 2}>
+        {display === 'icon' ? meta.icon : meta.label}
       </Text>
+    </Pressable>
+  );
+}
+
+/** "탭 표시" 글자/아이콘 선택 칩. `ui/SettingsScreen.tsx` 의 `Chip` 과 같은 모양이다. */
+function DisplayChip({
+  label,
+  active,
+  onPress,
+  colors,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  colors: Palette;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.displayChip,
+        {
+          borderColor: active ? colors.accent : colors.border,
+          backgroundColor: active ? colors.accent : 'transparent',
+          opacity: pressed ? 0.7 : 1,
+        },
+      ]}>
+      <Text style={active ? styles.displayChipTextOn : { color: colors.fg }}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  tab: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 9, alignItems: 'center' },
-  tabText: { fontSize: 14, fontWeight: '600' },
+  tab: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 9, paddingHorizontal: 2, alignItems: 'center' },
+  tabText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  tabIcon: { fontSize: 20 },
   tabTextOn: { color: '#ffffff' },
   screen: { marginTop: 4 },
   modeSwitch: { flexDirection: 'row', gap: 8, paddingHorizontal: 20 },
   interpretRoot: { flex: 1 },
   interpretBody: { flex: 1, marginTop: 8 },
+  modalRoot: { flex: 1 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  closeButton: { paddingHorizontal: 12, paddingVertical: 8 },
+  closeText: { fontSize: 15, fontWeight: '600' },
+  displayRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
+  displayLabel: { marginTop: 0 },
+  displayChips: { flexDirection: 'row', gap: 8 },
+  displayChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  displayChipTextOn: { color: '#ffffff', fontWeight: '600' },
 });
 
 export default App;

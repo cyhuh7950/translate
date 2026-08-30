@@ -273,6 +273,8 @@ test('말한 사람 쪽에 원문이, 상대 쪽에 번역문이 뜬다', async 
   const shown = texts.map(n => String(n.props.children));
   expect(shown).toContain('안녕');
   expect(shown).toContain('hello');
+  // 말한 쪽(아래) 자신에게도 상대에게 나간 번역문이 작게 뜬다.
+  expect(shown).toContain('→ hello');
 
   await ReactTestRenderer.act(async () => {
     pane('bottom').props.onPressOut();

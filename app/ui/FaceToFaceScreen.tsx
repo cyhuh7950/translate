@@ -77,6 +77,11 @@ export function FaceToFaceScreen({
   const [error, setError] = useState('');
   const [lang, setLang] = useState<{ top: string; bottom: string }>({ top: '', bottom: '' });
   const [text, setText] = useState<{ top: string; bottom: string }>({ top: '', bottom: '' });
+  /**
+   * 상대에게 나간 번역문 — 말한 쪽 자신에게도 작게 보여준다("내 말이 이렇게 전달됐다"
+   * 확인용). 듣는 쪽의 큰 텍스트(`text`)와 같은 값이지만 표시 크기·위치가 다르다.
+   */
+  const [translated, setTranslated] = useState<{ top: string; bottom: string }>({ top: '', bottom: '' });
 
   const sessionRef = useRef<StreamSession | null>(null);
   const captureRef = useRef<MicCapture | null>(null);
@@ -154,7 +159,10 @@ export function FaceToFaceScreen({
       config: message,
       handlers: {
         'stt.final': event => setSideText(side, event.text || ''),
-        'llm.final': event => setSideText(listener, event.text || ''),
+        'llm.final': event => {
+          setSideText(listener, event.text || '');
+          setTranslated(prev => ({ ...prev, [side]: event.text || '' }));
+        },
         'speaker.rejected': event => setError(`건너뜀 — ${event.reason}`),
         error: event => setError(event.message),
       },
@@ -273,6 +281,7 @@ export function FaceToFaceScreen({
       <Pane
         side="top"
         text={text.top}
+        translated={translated.top}
         pressing={pressingSide === 'top'}
         busy={busy && pressingSide === 'top'}
         disabled={busy && pressingSide !== 'top'}
@@ -308,6 +317,7 @@ export function FaceToFaceScreen({
       <Pane
         side="bottom"
         text={text.bottom}
+        translated={translated.bottom}
         pressing={pressingSide === 'bottom'}
         busy={busy && pressingSide === 'bottom'}
         disabled={busy && pressingSide !== 'bottom'}
@@ -323,6 +333,7 @@ export function FaceToFaceScreen({
 function Pane({
   side,
   text,
+  translated,
   pressing,
   busy,
   disabled,
@@ -332,6 +343,8 @@ function Pane({
 }: {
   side: Side;
   text: string;
+  /** 이 쪽이 말해서 상대에게 나간 번역문. 없으면(아직 말한 적 없으면) 아무것도 안 그린다. */
+  translated: string;
   pressing: boolean;
   busy: boolean;
   disabled: boolean;
@@ -358,6 +371,11 @@ function Pane({
       <Text style={[styles.paneText, { color: colors.fg }]} selectable>
         {text || '…'}
       </Text>
+      {translated !== '' && (
+        <Text style={[styles.translatedText, { color: colors.dim }]} selectable>
+          {`→ ${translated}`}
+        </Text>
+      )}
     </Pressable>
   );
 }
@@ -368,6 +386,7 @@ const styles = StyleSheet.create({
   rotated: { transform: [{ rotate: '180deg' }] },
   hint: { fontSize: 12 },
   paneText: { fontSize: 22, lineHeight: 30, textAlign: 'center' },
+  translatedText: { fontSize: 13, lineHeight: 18, textAlign: 'center' },
   footer: { borderTopWidth: 1, borderBottomWidth: 1, paddingVertical: 10, alignItems: 'center' },
   errorBox: { borderWidth: 1, padding: 10 },
 });

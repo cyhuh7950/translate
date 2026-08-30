@@ -248,12 +248,27 @@ describe('화면 렌더', () => {
     });
 
     // 탭은 label 로 찾는다 — 화면에 보이는 글자와 같아서 깨져도 이유가 분명하다.
+    // `TabButton` 은 `label` 을 `meta` 안에 담아 받는다(아이콘/글자 표시 전환 때문).
     const tab = (label: string) =>
       tree!.root.findAll(
-        node => node.props?.label === label && typeof node.props?.onPress === 'function',
+        node => node.props?.meta?.label === label && typeof node.props?.onPress === 'function',
       )[0];
 
-    for (const label of ['설정', '실시간 통역', '학습 로그인']) {
+    // 실시간 통역은 메인 탭 그대로다.
+    const live = tab('실시간 통역');
+    expect(live).toBeDefined();
+    await ReactTestRenderer.act(() => {
+      live!.props.onPress();
+    });
+
+    // 번역 설정·학습 로그인은 ⚙️ 설정 팝업 안으로 옮겨졌다 — 먼저 열어야 보인다.
+    const gear = tab('설정');
+    expect(gear).toBeDefined();
+    await ReactTestRenderer.act(() => {
+      gear!.props.onPress();
+    });
+
+    for (const label of ['번역 설정', '학습 로그인']) {
       const button = tab(label);
       expect(button).toBeDefined();
       await ReactTestRenderer.act(() => {
@@ -276,8 +291,8 @@ describe('화면 렌더', () => {
     await ReactTestRenderer.act(() => {
       modeButton('통역모드').props.onPress();
     });
-    // 통역모드에서는 탭 바(예: '설정')가 사라지고 언어설정 바가 있어야 한다.
-    expect(tree!.root.findAll(n => n.props?.label === '설정')).toHaveLength(0);
+    // 통역모드에서는 탭 바(예: ⚙️ '설정' 버튼)가 사라지고 언어설정 바가 있어야 한다.
+    expect(tree!.root.findAll(n => n.props?.meta?.label === '설정')).toHaveLength(0);
     expect(
       tree!.root.findAll(
         n => typeof n.props?.children === 'string' && String(n.props.children).includes('언어설정'),
@@ -287,7 +302,11 @@ describe('화면 렌더', () => {
     await ReactTestRenderer.act(() => {
       modeButton('번역모드').props.onPress();
     });
-    expect(modeButton('설정')).toBeDefined();
+    expect(
+      tree!.root.findAll(
+        n => n.props?.meta?.label === '설정' && typeof n.props?.onPress === 'function',
+      )[0],
+    ).toBeDefined();
   });
 });
 

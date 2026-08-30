@@ -40,6 +40,8 @@ export interface Saved {
    * 남기는 것은 이후 요청에 실어 보낼 `user_id` 와, 화면에 보여줄 이름뿐이다.
    */
   user?: { id: string; name: string };
+  /** 탭을 글자로 보여줄지 아이콘(이모지)으로 보여줄지 — 화면 전용, 서버로 나가지 않는다. */
+  tabDisplay?: 'text' | 'icon';
 }
 
 /**
