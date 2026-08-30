@@ -242,6 +242,43 @@ function readWav(bytes: ArrayBuffer): DecodedAudio | null {
   throw new Error(`재생할 수 없는 WAV 형식이다 (format=${format}, bits=${bits}).`);
 }
 
+/* ---- 답변 오디오 쓰기 -------------------------------------------------------- */
+
+/**
+ * PCM16 모노를 RIFF/WAVE 로 감싼다.
+ *
+ * `lang_learn` 세션에 음성 답변을 보낼 때 쓴다 — 그쪽은 번역 스트림과 달리 프레임을
+ * 계속 흘려보내는 것이 아니라 **답변 하나를 통째로** 보내고, 서버 기본 `content_type`
+ * (`stream.segment_content_type`, `audio/wav`)이 컨테이너 있는 오디오를 기대한다.
+ * 원시 PCM16 프레임을 이어붙인 것만으로는 그 계약을 못 지키므로 헤더를 씌운다.
+ */
+export function encodeWav(pcm: Int16Array, sampleRate: number, channels = 1): ArrayBuffer {
+  const dataLength = pcm.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  writeTag(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeTag(view, 8, 'WAVE');
+  writeTag(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // fmt 청크 길이
+  view.setUint16(20, 1, true); // PCM 정수
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * 2, true); // byte rate
+  view.setUint16(32, channels * 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeTag(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+  for (let i = 0; i < pcm.length; i += 1) view.setInt16(44 + i * 2, pcm[i] as number, true);
+
+  return buffer;
+}
+
+function writeTag(view: DataView, at: number, fourCC: string): void {
+  for (let i = 0; i < 4; i += 1) view.setUint8(at + i, fourCC.charCodeAt(i));
+}
+
 function tag(view: DataView, at: number): string {
   return String.fromCharCode(
     view.getUint8(at),

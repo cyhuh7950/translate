@@ -2,6 +2,20 @@
 
 세션이 끊겨도 어디까지 했는지 알 수 있도록 남기는 기록. 최신 항목이 위.
 
+## 2026-08-30 (3)
+- 학습 세션(문제 풀이) 화면(`ui/LearnScreen.tsx`) 구현 — PLAN_LANG_LEARN.md 앱 작업 4번.
+  `src/api/langlearn.ts`(WS 클라이언트, `getLangLearnSettings`), `audio/pcm.ts`의
+  `encodeWav`(음성 답변을 WAV로 감싸 한 번에 전송)를 새로 추가. WS 경로·기본 문제 수는
+  `/v1/config`의 `lang_learn` 섹션에서 읽는다(하드코딩 없음).
+- `__tests__/learn.test.tsx` 추가 — start/ready/problem/answer/feedback/summary/done
+  왕복을 가짜 소켓으로 검증. `npm run verify` 전체(번들·typecheck·lint·test) 통과.
+- 실기기 + 실서버(`translate.sinsan.kr`)로 종단 검증 완료: 로그인(`learntest` 계정 신규
+  등록) → 학습 세션 시작 → LLM이 생성한 문제 수신 → 텍스트 답변 제출 → 실제 LLM 채점
+  피드백·총평 수신 → session.done까지 전부 정상 확인.
+- 다음: 학습 설정 화면(PLAN 앱 작업 2번, 스케줄/난이도/피드백모드 편집)과 알림→세션
+  진입 연결(`notifications.ts`의 `onLangLearnNotificationPress`가 아직 어디에도
+  안 걸려 있음)이 남음.
+
 ## 2026-08-30 (2)
 - 앱 런처 아이콘을 기본 RN 로봇 아이콘에서 자체 디자인(파란 배경 + 흰 말풍선 + 음성 파형)으로 교체.
   imagemagick/sharp가 없는 환경이라 `scripts/gen-icon.py`(Pillow)로 직접 그려서 밀도별 PNG 생성.

@@ -187,6 +187,8 @@ export interface ServerConfig {
   speaker_id: SpeakerIdView;
   client: ClientView;
   stream: StreamView;
+  /** `lang_learn` 모듈이 얹는 섹션. 그 모듈이 붙어 있지 않은 서버에서는 없다. */
+  lang_learn?: LangLearnConfigView;
   [section: string]: unknown;
 }
 
@@ -462,3 +464,149 @@ export type StreamEvent = KnownStreamEvent | UnknownStreamEvent;
 
 /** `type` 에서 그 이벤트의 타입을 뽑는다. 핸들러 맵이 이것으로 만들어진다. */
 export type StreamEventOf<K extends StreamEventType> = Extract<KnownStreamEvent, { type: K }>;
+
+/* ---- lang_learn: 설정 -------------------------------------------------------
+ *
+ * 근거: orchestrator/app/modules/lang_learn/routes.py (HTTP), config/defaults.yaml
+ * (lang_learn: 섹션), DESIGN.md §15 (프로토콜·설정 스키마).
+ */
+
+export interface LangLearnScheduleSlot {
+  /** "HH:MM", 24시간제. */
+  time: string;
+  count: number;
+}
+
+/** 사용자별 학습 설정. `GET/PUT /v1/users/{id}/lang_learn/settings` 의 본문 그대로. */
+export interface LangLearnSettings {
+  schedule: LangLearnScheduleSlot[];
+  target_lang: string;
+  /** adaptive | manual — 값 목록을 앱에 두지 않는다. */
+  level_mode: string;
+  manual_level: string | null;
+  /** immediate | summary | both */
+  feedback_mode: string;
+  show_text_for_repeat: boolean;
+}
+
+/** `/v1/config` 의 `lang_learn` 섹션 — WS 경로를 여기서 얻는다(하드코딩하지 않는다). */
+export interface LangLearnConfigView {
+  stream: { path: string; default_count: number };
+  /** 적응형 난이도 단계 이름. 순서가 등급이다(낮은 인덱스가 쉬움). */
+  levels: string[];
+  /** 아무도 설정을 저장하지 않은 사용자가 받는 기본값. */
+  defaults: LangLearnSettings;
+  /** 세션당 문제 유형이 오가는 순서(`repeat`/`compose`가 이 순서를 반복한다). */
+  answer_type_pattern: string[];
+}
+
+/** `GET /v1/users/{id}/lang_learn/history` 한 항목의 문제 하나. */
+export interface LangLearnProblemRecord {
+  idx: number;
+  answer_type: string;
+  problem_text: string;
+  answer_text: string;
+  grade: string;
+  comment: string;
+}
+
+/** 과거 학습 세션 이력 한 건. 내부 점수는 프로토콜과 마찬가지로 나가지 않는다. */
+export interface LangLearnHistorySession {
+  id: string;
+  created_at: string;
+  target_lang: string;
+  level: string;
+  feedback_mode: string;
+  problems: LangLearnProblemRecord[];
+  summary_grade: string | null;
+  summary_comment: string | null;
+}
+
+/* ---- lang_learn: WS 프로토콜 ------------------------------------------------
+ *
+ * 근거: orchestrator/app/modules/lang_learn/session.py. `/v1/stream`(번역)과 별개
+ * 엔드포인트라 StreamEvent 계열과 타입을 공유하지 않는다 — 이벤트 이름은 같아도
+ * (`ready`/`error`) 모양이 다르다.
+ */
+
+/** 접속 후 딱 한 번 보내는 메시지. 값이 없는 필드는 저장된 설정을 그대로 쓴다. */
+export interface LangLearnStartMessage {
+  type: 'start';
+  user_id: string;
+  /** 없으면 서버 기본값(`lang_learn.stream.default_count`). */
+  count?: number;
+  locale?: string;
+}
+
+/** 답변 — 텍스트면 이 메시지 하나, 음성이면 이 메시지 뒤에 오디오 바이너리가 따라붙는다. */
+export type LangLearnAnswerMessage =
+  | { type: 'answer'; idx: number; modality: 'text'; text: string }
+  | { type: 'answer'; idx: number; modality: 'audio'; content_type: string; duration_s: number };
+
+export type LangLearnClientMessage = LangLearnStartMessage | LangLearnAnswerMessage;
+
+export interface LangLearnReadyEvent {
+  type: 'ready';
+  total: number;
+  target_lang: string;
+  level: string;
+  feedback_mode: string;
+}
+
+/**
+ * 문제 하나. `answer_type` 이 `repeat` 면 이 이벤트 뒤에 오디오 바이너리가 따라붙을 수
+ * 있다(`audio_hint`). `text` 는 두 유형 모두에 있다 — `repeat` 에서 화면에 보여줄지는
+ * 앱의 `show_text_for_repeat` 설정이 정한다(서버는 항상 보낸다).
+ */
+export interface LangLearnProblemEvent {
+  type: 'problem';
+  idx: number;
+  total: number;
+  answer_type: 'repeat' | 'compose';
+  text: string;
+  audio_hint: boolean;
+}
+
+export interface LangLearnAnswerReceivedEvent {
+  type: 'answer.received';
+  idx: number;
+}
+
+/** `feedback_mode` 가 immediate/both 일 때만 온다. 등급만 온다 — 점수는 서버에만 남는다. */
+export interface LangLearnFeedbackEvent {
+  type: 'feedback';
+  idx: number;
+  grade: string;
+  comment: string;
+}
+
+/** `feedback_mode` 가 summary/both 일 때만, 마지막 문제 뒤에 온다. */
+export interface LangLearnSessionSummaryEvent {
+  type: 'session.summary';
+  grade: string;
+  comment: string;
+}
+
+export interface LangLearnSessionDoneEvent {
+  type: 'session.done';
+}
+
+export interface LangLearnErrorEvent {
+  type: 'error';
+  code: string;
+  message: string;
+  params: Record<string, unknown>;
+}
+
+export type LangLearnEvent =
+  | LangLearnReadyEvent
+  | LangLearnProblemEvent
+  | LangLearnAnswerReceivedEvent
+  | LangLearnFeedbackEvent
+  | LangLearnSessionSummaryEvent
+  | LangLearnSessionDoneEvent
+  | LangLearnErrorEvent;
+
+export type LangLearnEventType = LangLearnEvent['type'];
+
+export type LangLearnEventOf<K extends LangLearnEventType> = Extract<LangLearnEvent, { type: K }>;

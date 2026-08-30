@@ -46,6 +46,7 @@ import { ApiError, StreamError } from './src/api';
 import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
 import { FaceToFaceScreen } from './ui/FaceToFaceScreen';
+import { LearnScreen } from './ui/LearnScreen';
 import { LiveScreen } from './ui/LiveScreen';
 import { LoginScreen } from './ui/LoginScreen';
 import type { LoggedInUser } from './ui/LoginScreen';
@@ -92,15 +93,16 @@ function errorText(err: unknown): string {
  */
 type AppMode = 'translate' | 'interpret';
 
-type Tab = 'connect' | 'settings' | 'live' | 'login';
+type Tab = 'connect' | 'settings' | 'live' | 'login' | 'learn';
 
 /** 탭 이름이자 화면 제목. 순서가 곧 화면에 놓이는 순서다. */
 const TABS: { id: Tab; label: string }[] = [
   { id: 'connect', label: '연결 확인' },
   { id: 'settings', label: '설정' },
   { id: 'live', label: '실시간 통역' },
-  // 언어 학습 계정 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
+  // 언어 학습 계정·세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
   { id: 'login', label: '학습 로그인' },
+  { id: 'learn', label: '학습 세션' },
 ];
 
 function App() {
@@ -288,6 +290,7 @@ function Root({ isDark }: { isDark: boolean }) {
         {tab === 'login' && (
           <LoginScreen {...shared} user={user} onUser={setUser} />
         )}
+        {tab === 'learn' && <LearnScreen {...shared} user={user} onConfig={setConfig} />}
       </View>
     </ScrollView>
   );

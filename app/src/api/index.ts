@@ -11,3 +11,4 @@ export * from './models';
 export * from './stream';
 export * from './translate';
 export * from './users';
+export * from './langlearn';
