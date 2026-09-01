@@ -55,6 +55,8 @@ export interface ApiClient {
   baseUrl: string;
   /** 주입받은 fetch. Node 든 RN 든 전역을 그대로 넘기면 된다. */
   fetch: FetchLike;
+  /** multipart 요청 본문을 만드는 환경별 FormData 생성기. */
+  formData?: () => FormDataLike;
   /** 서버의 `auth.api_key`. 비어 있으면 인증이 꺼진 서버다. */
   apiKey?: string;
   /**

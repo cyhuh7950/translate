@@ -63,3 +63,29 @@ test('두 번 start 해도 녹음기를 둘로 만들지 않는다', async () =>
     spy.restore();
   }
 });
+
+test('파일 출력 모드에서는 네이티브 WAV 경로를 돌려준다', async () => {
+  const api = require('react-native-audio-api');
+  const originalEnable = api.AudioRecorder.prototype.enableFileOutput;
+  const originalStop = api.AudioRecorder.prototype.stop;
+  const enableOptions: unknown[] = [];
+  api.AudioRecorder.prototype.enableFileOutput = function patched(this: unknown, options: unknown) {
+    enableOptions.push(options);
+    return { status: 'success' };
+  };
+  api.AudioRecorder.prototype.stop = async function patchedStop() {
+    return { status: 'success', paths: ['/cache/stt-training.wav'], size: 1, duration: 1 };
+  };
+  try {
+    const capture = new MicCapture(
+      { sampleRate: 16000, channels: 1, frameSamples: 320, fileOutput: true },
+      { onFrame: () => {} },
+    );
+    await capture.start();
+    await expect(capture.stopWithFile()).resolves.toBe('/cache/stt-training.wav');
+    expect(enableOptions[0]).toEqual(expect.objectContaining({ format: api.FileFormat.Wav }));
+  } finally {
+    api.AudioRecorder.prototype.enableFileOutput = originalEnable;
+    api.AudioRecorder.prototype.stop = originalStop;
+  }
+});

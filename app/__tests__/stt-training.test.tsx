@@ -1,9 +1,7 @@
 /**
  * `ui/SttTrainingScreen.tsx` 배선 검사.
  *
- * ⚠️ 서버 API가 아직 없어서(`src/api/stt_training.ts` 상단 주석) 여기서 확인하는 것은
- * "화면이 추정 계약대로 요청을 만드는가"이지, 실제 서버와 맞물리는지가 아니다 — 그건
- * API가 붙은 뒤 실기기로 다시 봐야 한다.
+ * 서버의 확정 API 계약(multipart WAV + 중첩 응답)을 화면이 지키는지 확인한다.
  *
  * 녹음은 `__tests__/screens.test.tsx` 의 `tapMic` 과 같은 방식으로 흉내 낸다 — 네이티브
  * 라이브러리가 20ms 버퍼를 올려주는 것과 같은 콜백을 손으로 부른다.
@@ -58,7 +56,8 @@ function fakeConfig(): ServerConfig {
     client: { input_modes: ['ptt', 'handsfree'], default_input_mode: 'ptt' },
     stream: { path: '/v1/stream', input_format: 'pcm16', client_frame_ms: 20 },
     stt_training: {
-      languages: [{ code: 'ko', label: '한국어' }],
+      languages: ['ko'],
+      default_lang: 'ko',
       required_read_count: 5,
       required_verify_count: 5,
     },
@@ -71,26 +70,40 @@ interface Req {
   body?: unknown;
 }
 
+class FakeFormData {
+  readonly parts: Array<{ name: string; value: unknown; fileName?: string }> = [];
+
+  append(name: string, value: unknown, fileName?: string): void {
+    this.parts.push({ name, value, fileName });
+  }
+}
+
 /** 이 화면이 실제로 부를 경로들을 흉내 낸다. 요청은 전부 `requests` 에 기록된다. */
 function fakeClient(config: ServerConfig, requests: Req[]) {
   return {
     baseUrl: 'http://server.test',
+    formData: () => new FakeFormData(),
+    blob: (bytes: ArrayBuffer, contentType: string) => ({ bytes, contentType }),
     fetch: async (url: string, init?: { method?: string; body?: unknown }) => {
       const method = init?.method || 'GET';
-      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body;
       requests.push({ method, url, body });
 
       let responseBody: unknown;
       if (url.includes('/stt_training/status')) {
         responseBody = { read: { done: 1, required: 5 }, verify: { done: 0, required: 5 } };
       } else if (url.includes('/stt_training/next_prompt')) {
-        responseBody = { done: false, prompt_id: 'p1', text: '오늘 날씨가 좋습니다.', lang: 'ko' };
+        responseBody = {
+          done: false,
+          prompt: { id: 'p1', text: '오늘 날씨가 좋습니다.', lang: 'ko' },
+          progress: { done: 1, required: 5 },
+        };
       } else if (url.includes('/stt_training/read_sample')) {
-        responseBody = { read: { done: 2, required: 5 } };
+        responseBody = { saved: true, progress: { done: 2, required: 5 } };
       } else if (url.includes('/stt_training/verify/') && url.includes('/verdict')) {
-        responseBody = { verify: { done: 1, required: 5 } };
+        responseBody = { confirmed: true, progress: { done: 1, required: 5 } };
       } else if (url.includes('/stt_training/verify')) {
-        responseBody = { sample_id: 's1', text: '안녕하세요' };
+        responseBody = { sample_id: 's1', recognized_text: '안녕하세요' };
       } else {
         responseBody = config; // /v1/config
       }
@@ -213,10 +226,15 @@ test('진행률을 불러오고, 낭독 문장을 받아 녹음하면 read_sampl
     const readRequest = requests.find(r => r.url.includes('/read_sample'));
     expect(readRequest).toBeDefined();
     expect(readRequest!.method).toBe('POST');
-    const readBody = readRequest!.body as { prompt_id: string; audio_base64: string; content_type: string };
-    expect(readBody.prompt_id).toBe('p1');
-    expect(readBody.content_type).toBe('audio/wav');
-    expect(readBody.audio_base64.length).toBeGreaterThan(0);
+    expect(readRequest!.body).toBeInstanceOf(FakeFormData);
+    const readBody = readRequest!.body as FakeFormData;
+    expect(readBody.parts.map(part => part.name)).toEqual(['prompt_id', 'file']);
+    expect(readBody.parts[0]!.value).toBe('p1');
+    expect(readBody.parts[1]!.value).toEqual({
+      uri: '/mock/path/recording.m4a',
+      name: 'sample.wav',
+      type: 'audio/wav',
+    });
 
     // 업로드 후 진행률이 응답대로 갱신된다.
     expect(texts().some(t => t.includes('2 / 5'))).toBe(true);

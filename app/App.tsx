@@ -222,7 +222,11 @@ function Root({ isDark }: { isDark: boolean }) {
   const makeClient = useCallback((): ApiClient | null => {
     const url = baseUrl.trim();
     if (!url) return null;
-    const client: ApiClient = { baseUrl: url, fetch: rnFetch };
+    const client: ApiClient = {
+      baseUrl: url,
+      fetch: rnFetch,
+      formData: () => new FormData(),
+    };
     if (apiKey.trim()) client.apiKey = apiKey.trim();
     if (LOCALE) client.locale = LOCALE;
     return client;

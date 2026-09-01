@@ -35,6 +35,8 @@ export interface CaptureSpec {
   channels: number;
   /** frameSamples(config) — stt_sample_rate × client_frame_ms / 1000 */
   frameSamples: number;
+  /** 파일 업로드가 필요한 단발 녹음이면 네이티브 파일 출력도 켠다. */
+  fileOutput?: boolean;
 }
 
 export interface CaptureHandlers {
@@ -82,6 +84,23 @@ export class MicCapture {
     this.recorder = recorder;
     this.framer.reset();
 
+    if (this.spec.fileOutput) {
+      const api = audioApi();
+      const fileOutput = recorder.enableFileOutput({
+        directory: api.FileDirectory.Cache,
+        subDirectory: 'TranslateApp',
+        format: api.FileFormat.Wav,
+        channelCount: this.spec.channels,
+        fileNamePrefix: 'stt-training',
+        androidFlushIntervalMs: 500,
+      });
+      const fileError = failureOf(fileOutput);
+      if (fileError !== null) {
+        this.stop();
+        throw new Error(fileError || '녹음 파일 출력을 설정하지 못했다.');
+      }
+    }
+
     recorder.onError(event => {
       if (this.handlers.onError) this.handlers.onError(event.message);
     });
@@ -123,6 +142,27 @@ export class MicCapture {
     }
     // stop() 은 프라미스를 준다. 결과를 기다릴 이유가 없어 흘려보내되 거부는 삼킨다.
     Promise.resolve(recorder.stop()).catch(() => undefined);
+  }
+
+  /** 녹음을 멈추고 네이티브가 만든 파일 URI를 돌려준다. */
+  async stopWithFile(): Promise<string | null> {
+    const recorder = this.recorder;
+    this.recorder = null;
+    this.resampler = null;
+    this.noticedRate = 0;
+    this.framer.reset();
+    if (!recorder) return null;
+    try {
+      recorder.clearOnAudioReady();
+      recorder.clearOnError();
+    } catch {
+      // 이미 정리된 경우. 그래도 stop 결과는 확인한다.
+    }
+    const result = await recorder.stop();
+    const error = failureOf(result);
+    if (error !== null) throw new Error(error || '녹음 파일을 저장하지 못했다.');
+    const paths = (result as { paths?: string[] }).paths;
+    return paths && paths.length > 0 ? paths[0] : null;
   }
 
   get running(): boolean {

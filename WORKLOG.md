@@ -1,6 +1,29 @@
 # 작업 로그
 
+## 2026-09-01 — 실기기 운영 STT 업로드 재검증
+
+- 원인: React Native에서 `Blob(ArrayBuffer)` 생성이 지원되지 않아 이전 업로드가 서버에 도달하지 않음.
+- 조치: `react-native-audio-api` 네이티브 WAV 파일 출력을 켜고, 반환된 파일 URI를 RN multipart 파일 파트로 전송하도록 수정.
+- 검증: Jest 12 suites/86 tests, typecheck, Android bundle 통과. 수정 APK를 `SM-N981N`에 설치하고 운영 주소 `https://translate.sinsan.kr`로 실행.
+- 실제 결과: 낭독 샘플 업로드 후 서버 진행률 `낭독 교정 0/10 → 1/10`, 다음 문장 갱신 확인. 정오 샘플 업로드는 성공했으나 STT 결과가 빈 문자열이라 `맞음`/`틀림` 판정은 제출하지 않음.
+- 미검증/보류: 실제 발화가 포함된 정오 샘플의 인식 결과와 판정 제출. 빈 결과에 대해 임의의 정답을 넣어 운영 학습 데이터를 오염시키지 않는다.
+- 재시도: 정오 탭을 새로 열어 다시 녹음·업로드했으나 결과가 다시 `(빈 결과)`였고 진행률은 `0/10`으로 유지됨. 앱 업로드 경로는 정상이며, 기기에서 실제 음성이 입력되는지 확인이 필요하다.
+
 세션이 끊겨도 어디까지 했는지 알 수 있도록 남기는 기록. 최신 항목이 위.
+
+## 2026-09-01
+- canonical 서버(`ysna-server:~/deploy/translate`)와 앱의 STT 학습 0단계 API 계약을 대조한
+  결과, 앱이 이전 추정 계약(JSON+base64)을 사용하고 서버는 확정 계약(multipart WAV)을
+  사용하는 불일치를 확인했다.
+- 앱을 서버 계약에 맞췄다: `FormData`/`Blob` 환경 주입, `prompt` 중첩 응답,
+  `recognized_text`, `saved/confirmed + progress`, multipart `prompt_id`/`file` 업로드.
+- TDD로 서버 확정 응답을 반영한 화면 테스트를 먼저 RED로 확인한 뒤 수정했다.
+- 검증: 번들·typecheck·lint·전체 Jest 통과(12 suites, 85 tests). lint는 기존 warning 10건,
+  error 없음. 운영 서버는 `orchestrator`/`web` healthy 및 `/health` 정상 응답 확인.
+- 2026-09-01 후속: SM-N981N(Android 13)이 연결되어 최신 APK 빌드·설치·실행 및 Metro
+  연결을 확인했다. 운영 서버 주소 표시, 설정 팝업의 `STT 학습` 진입, 로그인 필요 안내,
+  런타임 예외 없음까지 실기기 확인 완료. 기기에 로그인 계정이 없어 multipart 업로드 왕복은
+  계정 자격 증명 없이는 진행할 수 없어 미검증으로 유지한다.
 
 ## 2026-08-30 (7)
 - STT 학습(개인화) 화면 시범 구현 — `PLAN_STT_PERSONALIZATION.md` 0단계 앱 작업

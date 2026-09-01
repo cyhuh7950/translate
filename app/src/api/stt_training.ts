@@ -1,22 +1,12 @@
 /**
  * `stt_training` 모듈의 클라이언트 — 낭독 교정·정오 판정 데이터 수집.
  *
- * ⚠️ **서버에 아직 이 모듈이 없다**(2026-08-30 시점, `PLAN_STT_PERSONALIZATION.md`
- * 0단계는 계획만 확정됐다). 경로·필드 이름은 그 계획서 문장을 그대로 코드로 옮긴
- * 추정 계약이다 — 서버가 실제로 붙으면 `MESSAGE_TO_SERVER.md` 로 맞춰보고 다르면
- * 이 파일과 `./types.ts` 의 `SttTraining*` 타입만 고치면 된다(화면은 이 함수들
- * 뒤에 있으니 손대지 않아도 된다).
- *
- * **multipart 가 아니라 JSON+base64 로 오디오를 보낸다.** RN 의 `FormData` 는 실제
- * 파일 `uri`(`file://`, `content://` …)만 담을 수 있고 메모리에 있는 바이너리를 직접
- * 담지 못한다(RN 소스 `Libraries/Network/FormData.js` — part 값이 `string` 이거나
- * `{uri, name?, type?}` 뿐이다). `lang_learn` 의 WS 응답이 이미 오디오를 base64 로
- * 실어 보내는 것과 같은 관례라 요청 쪽에도 그대로 맞췄다 — 새 파일시스템 의존성
- * (`react-native-fs` 등) 없이 끝난다.
+ * 서버 확정 계약: multipart FormData 안에 WAV 파일을 넣는다. 파일 URI는 환경별
+ * 네이티브 파일 경로를 그대로 사용해 React Native의 Blob 비호환을 피한다.
  */
 
 import { request } from './http';
-import type { ApiClient } from './http';
+import type { ApiClient, FormDataLike } from './http';
 import type {
   SttTrainingNextPrompt,
   SttTrainingReadSampleRequest,
@@ -56,7 +46,10 @@ export function uploadReadSample(
 ): Promise<SttTrainingReadSampleResponse> {
   return request<SttTrainingReadSampleResponse>(client, `${base(userId)}/read_sample`, {
     method: 'POST',
-    json: req,
+    body: makeMultipart(client, form => {
+      form.append('prompt_id', req.prompt_id);
+      form.append('file', { uri: req.audio_uri, name: 'sample.wav', type: req.content_type });
+    }),
   });
 }
 
@@ -68,8 +61,17 @@ export function uploadVerify(
 ): Promise<SttTrainingVerifyResponse> {
   return request<SttTrainingVerifyResponse>(client, `${base(userId)}/verify`, {
     method: 'POST',
-    json: req,
+    body: makeMultipart(client, form => {
+      form.append('file', { uri: req.audio_uri, name: 'sample.wav', type: req.content_type });
+    }),
   });
+}
+
+function makeMultipart(client: ApiClient, fill: (form: FormDataLike) => void): FormDataLike {
+  if (!client.formData) throw new Error('multipart audio upload is not configured');
+  const form = client.formData();
+  fill(form);
+  return form;
 }
 
 /**
