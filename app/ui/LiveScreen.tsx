@@ -560,7 +560,7 @@ export function LiveScreen({
   return (
     <View>
       <Text style={[ui.sub, { color: colors.dim }]}>
-        마이크 → PCM16 프레임 → WS → 원문 · 번역문 · 번역 음성. 규격은 전부 /v1/config 에서 온다.
+        바로 말하면 상대 언어로 자연스럽게 전달돼요.
       </Text>
 
       <View style={ui.row}>
@@ -714,19 +714,24 @@ const styles = StyleSheet.create({
   state: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
   /** 손가락으로 눌러야 하는 버튼이라 크게 둔다. 누르는 동안 색이 바뀐다. */
   ptt: {
-    marginTop: 16,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingVertical: 26,
+    marginTop: 18,
+    borderWidth: 0,
+    borderRadius: 24,
+    paddingVertical: 30,
     alignItems: 'center',
     gap: 6,
+    shadowColor: '#14213D',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 5,
   },
-  pttLabel: { color: '#ffffff', fontSize: 17, fontWeight: '700' },
+  pttLabel: { color: '#ffffff', fontSize: 19, fontWeight: '800', letterSpacing: -0.2 },
   pttHint: { color: '#ffffff', fontSize: 12, opacity: 0.85 },
-  meter: { height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 8 },
-  meterFill: { height: 6 },
-  source: { fontSize: 16, lineHeight: 23, marginTop: 2 },
+  meter: { height: 8, borderRadius: 4, overflow: 'hidden', marginBottom: 10 },
+  meterFill: { height: 8, borderRadius: 4 },
+  source: { fontSize: 18, lineHeight: 26, marginTop: 2, fontWeight: '600' },
   /** stt.partial 로 들어온 중간 결과는 흐리게 — 아직 확정이 아니라는 표시다. */
   partial: { opacity: 0.6 },
-  target: { fontSize: 16, lineHeight: 23, marginTop: 8 },
+  target: { fontSize: 17, lineHeight: 25, marginTop: 12, fontWeight: '700' },
 });

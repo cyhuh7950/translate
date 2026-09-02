@@ -20,15 +20,15 @@ export interface Palette {
 }
 
 export const light: Palette = {
-  bg: '#ffffff',
-  fg: '#111111',
-  dim: '#6b7280',
-  border: '#d1d5db',
-  field: '#f9fafb',
-  accent: '#2563eb',
-  bad: '#b91c1c',
-  badBg: '#fef2f2',
-  good: '#15803d',
+  bg: '#F5F7FB',
+  fg: '#14213D',
+  dim: '#6C7893',
+  border: '#E4E9F2',
+  field: '#FFFFFF',
+  accent: '#1F6BFF',
+  bad: '#D94A5A',
+  badBg: '#FFF1F3',
+  good: '#19A987',
 };
 
 export const dark: Palette = {
@@ -43,26 +43,40 @@ export const dark: Palette = {
   good: '#4ade80',
 };
 
+/** 제품 화면이 공유하는 시각 토큰. 화면별 임의 색상 추가를 막는다. */
+export const productTheme = {
+  colors: {
+    background: '#F5F7FB',
+    surface: '#FFFFFF',
+    primary: '#1F6BFF',
+    accent: '#19C6A3',
+    ink: '#14213D',
+    muted: '#6C7893',
+  },
+  radius: { card: 24, control: 16, pill: 999 },
+  spacing: { screen: 20, card: 18, section: 16 },
+};
+
 export const ui = StyleSheet.create({
   root: { flex: 1 },
-  content: { paddingHorizontal: 20, gap: 4 },
-  title: { fontSize: 24, fontWeight: '700' },
-  sub: { fontSize: 13, marginBottom: 12, lineHeight: 18 },
-  label: { fontSize: 12, marginTop: 12, marginBottom: 4 },
+  content: { paddingHorizontal: 20, gap: 8 },
+  title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6 },
+  sub: { fontSize: 14, marginBottom: 14, lineHeight: 20 },
+  label: { fontSize: 12, fontWeight: '700', marginTop: 14, marginBottom: 6, letterSpacing: 0.2 },
   input: {
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 16,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 13,
     fontSize: 15,
   },
   multiline: { minHeight: 76, textAlignVertical: 'top' },
-  row: { flexDirection: 'row', gap: 10, marginTop: 20 },
-  button: { flex: 1, borderRadius: 8, paddingVertical: 13, alignItems: 'center' },
+  row: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  button: { flex: 1, borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
   buttonText: { color: '#ffffff', fontSize: 15, fontWeight: '600' },
   busy: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 },
   busyText: { fontSize: 13 },
-  box: { borderWidth: 1, borderRadius: 8, padding: 12, marginTop: 16 },
-  boxTitle: { fontSize: 11, fontWeight: '700', marginBottom: 6, letterSpacing: 1 },
+  box: { borderWidth: 1, borderRadius: 20, padding: 18, marginTop: 16 },
+  boxTitle: { fontSize: 11, fontWeight: '800', marginBottom: 8, letterSpacing: 1.1 },
   mono: { fontFamily: 'monospace', fontSize: 13, lineHeight: 19 },
 });

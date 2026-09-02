@@ -29,7 +29,7 @@ import { LiveScreen } from '../ui/LiveScreen';
 import { SettingsScreen } from '../ui/SettingsScreen';
 import { buildFields, streamConfig } from '../ui/settings';
 import type { Settings } from '../ui/settings';
-import { light } from '../ui/theme';
+import { light, productTheme } from '../ui/theme';
 
 /** 화면들이 공통으로 받는 것. App.tsx 가 넘기는 모양과 같다. */
 const common = {
@@ -190,6 +190,15 @@ function field(config: ServerConfig, form: Settings, name: string) {
 }
 
 describe('화면 렌더', () => {
+  it('제품형 테마가 산뜻한 고대비 팔레트와 일관된 토큰을 제공한다', () => {
+    expect(productTheme.colors.background).toBe('#F5F7FB');
+    expect(productTheme.colors.surface).toBe('#FFFFFF');
+    expect(productTheme.colors.primary).toBe('#1F6BFF');
+    expect(productTheme.colors.accent).toBe('#19C6A3');
+    expect(productTheme.radius.card).toBe(24);
+    expect(productTheme.radius.control).toBe(16);
+  });
+
   it('ConnectScreen 이 그려진다', async () => {
     await ReactTestRenderer.act(() => {
       ReactTestRenderer.create(
