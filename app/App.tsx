@@ -304,6 +304,16 @@ function Root({ isDark }: { isDark: boolean }) {
       keyboardShouldPersistTaps="handled">
       {modeSwitch(0)}
 
+      <View style={styles.brandRow}>
+        <View style={[styles.brandMark, { backgroundColor: colors.accent }]}>
+          <Text style={styles.brandMarkText}>↗</Text>
+        </View>
+        <View>
+          <Text style={[styles.brandName, { color: colors.fg }]}>Translate</Text>
+          <Text style={[styles.brandTagline, { color: colors.dim }]}>말이 통하는 순간</Text>
+        </View>
+      </View>
+
       <Text style={[ui.title, { color: colors.fg }]}>
         {active ? active.label : ''}
       </Text>
@@ -521,9 +531,14 @@ function DisplayChip({
 }
 
 const styles = StyleSheet.create({
-  tabs: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  tab: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 9, paddingHorizontal: 2, alignItems: 'center' },
-  tabText: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 4 },
+  brandMark: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  brandMarkText: { color: '#FFFFFF', fontSize: 22, fontWeight: '800' },
+  brandName: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+  brandTagline: { fontSize: 11, marginTop: 1 },
+  tabs: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  tab: { flex: 1, borderWidth: 1, borderRadius: 14, paddingVertical: 11, paddingHorizontal: 2, alignItems: 'center' },
+  tabText: { fontSize: 12, fontWeight: '700', textAlign: 'center' },
   tabIcon: { fontSize: 20 },
   tabTextOn: { color: '#ffffff' },
   screen: { marginTop: 4 },

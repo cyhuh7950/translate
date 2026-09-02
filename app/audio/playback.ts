@@ -40,6 +40,7 @@ export class TtsPlayer {
   /** 다음 청크를 붙일 시각. */
   private playAt = 0;
   private sources: AudioBufferSourceNode[] = [];
+  private endTimers = new Map<AudioBufferSourceNode, ReturnType<typeof setTimeout>>();
   private playing = false;
   /** `stop()` 이 지나간 뒤에 도착한 청크를 버리기 위한 세대 번호. */
   private generation = 0;
@@ -66,6 +67,9 @@ export class TtsPlayer {
     const sources = this.sources;
     this.sources = [];
     for (const source of sources) {
+      const timer = this.endTimers.get(source);
+      if (timer !== undefined) clearTimeout(timer);
+      this.endTimers.delete(source);
       try {
         source.stop();
       } catch {
@@ -102,16 +106,15 @@ export class TtsPlayer {
     source.connect(context.destination);
 
     const at = Math.max(context.currentTime, this.playAt);
-    source.onEnded = () => {
-      this.sources = this.sources.filter(s => s !== source);
-      if (this.sources.length === 0) {
-        this.playAt = 0;
-        this.setPlaying(false);
-      }
-    };
+    const finish = () => this.finishSource(source);
+    source.onEnded = finish;
     source.start(at);
     this.playAt = at + buffer.duration;
     this.sources.push(source);
+    // 일부 Android 오디오 경로에서는 네이티브 onEnded 전달이 누락될 수 있다.
+    // 실제 재생 길이를 넘긴 뒤에도 남아 있으면 상태만 정리한다.
+    const endTimer = setTimeout(finish, Math.max(0, (this.playAt - context.currentTime) * 1000 + 100));
+    this.endTimers.set(source, endTimer);
     this.setPlaying(true);
 
     if (this.handlers.onChunk) {
@@ -121,6 +124,17 @@ export class TtsPlayer {
         container: decoded.container,
         seconds: buffer.duration,
       });
+    }
+  }
+
+  private finishSource(source: AudioBufferSourceNode): void {
+    const timer = this.endTimers.get(source);
+    if (timer !== undefined) clearTimeout(timer);
+    this.endTimers.delete(source);
+    this.sources = this.sources.filter(s => s !== source);
+    if (this.sources.length === 0) {
+      this.playAt = 0;
+      this.setPlaying(false);
     }
   }
 

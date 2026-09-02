@@ -365,7 +365,7 @@ function Pane({
       ]}
       onPressIn={onPressIn}
       onPressOut={onPressOut}>
-      <Text style={[styles.hint, { color: colors.dim }]}>
+      <Text style={[styles.hint, { color: colors.accent }]}>
         {busy ? '연결하는 중…' : pressing ? '듣는 중 — 손을 떼면 번역한다' : '누르고 말하기'}
       </Text>
       <Text style={[styles.paneText, { color: colors.fg }]} selectable>
@@ -382,11 +382,25 @@ function Pane({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  pane: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
+  pane: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 12,
+    marginHorizontal: 12,
+    marginVertical: 8,
+    borderRadius: 28,
+    shadowColor: '#14213D',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 2,
+  },
   rotated: { transform: [{ rotate: '180deg' }] },
-  hint: { fontSize: 12 },
-  paneText: { fontSize: 22, lineHeight: 30, textAlign: 'center' },
-  translatedText: { fontSize: 13, lineHeight: 18, textAlign: 'center' },
-  footer: { borderTopWidth: 1, borderBottomWidth: 1, paddingVertical: 10, alignItems: 'center' },
-  errorBox: { borderWidth: 1, padding: 10 },
+  hint: { fontSize: 13, fontWeight: '800', letterSpacing: 0.2 },
+  paneText: { fontSize: 25, lineHeight: 34, textAlign: 'center', fontWeight: '700' },
+  translatedText: { fontSize: 15, lineHeight: 21, textAlign: 'center', fontWeight: '600' },
+  footer: { marginHorizontal: 12, borderRadius: 16, borderWidth: 1, paddingVertical: 12, alignItems: 'center' },
+  errorBox: { marginHorizontal: 12, borderWidth: 1, borderRadius: 16, padding: 14 },
 });
