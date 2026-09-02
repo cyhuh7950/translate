@@ -263,6 +263,29 @@ lang_learn.answer_required: >-
 lang_learn.unknown_modality: "Unknown answer modality: '{modality}'"
 lang_learn.audio_required: "Expected audio bytes for the answer to problem {idx}"
 
+# ---- STT 개인화 데이터 수집 (stt_training 모듈) -----------------------------
+stt_training.failed: "The STT-training request could not be completed"
+stt_training.user_required: "A user id is required"
+stt_training.unknown_user: "No user found with id '{user_id}'"
+stt_training.unknown_lang: "No sentence bank for language '{lang}' (available: {available})"
+stt_training.unknown_prompt: "No sentence found with prompt id '{prompt_id}'"
+stt_training.sample_not_found: "No pending verify sample found with id '{sample_id}'"
+stt_training.corrected_text_required: >-
+  corrected_text is required when correct is false — a "wrong" verdict without an
+  answer gives nothing to learn from
+
+stt_training.read_store_failed: "The read-aloud sample store could not be used"
+stt_training.read_store_not_configured: "stt_training.read_store_path is not configured"
+stt_training.read_store_unreadable: >-
+  The read-aloud sample store at {path} could not be read ({reason}). It has not
+  been touched to avoid losing what is left of it
+
+stt_training.verify_store_failed: "The verify sample store could not be used"
+stt_training.verify_store_not_configured: "stt_training.verify_store_path is not configured"
+stt_training.verify_store_unreadable: >-
+  The verify sample store at {path} could not be read ({reason}). It has not been
+  touched to avoid losing what is left of it
+
 # ---- 그 밖 ------------------------------------------------------------------
 #
 # `http.*` 는 프레임워크가 만든 응답(없는 경로, 허용되지 않은 메서드, 본문 검증)에

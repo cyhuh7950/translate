@@ -250,6 +250,29 @@ lang_learn.answer_required: >-
 lang_learn.unknown_modality: "모르는 답변 형식입니다: '{modality}'"
 lang_learn.audio_required: "문제 {idx} 의 답변으로 오디오 바이트가 필요합니다"
 
+# ---- STT 개인화 데이터 수집 (stt_training 모듈) -----------------------------
+stt_training.failed: "STT 학습 요청을 처리하지 못했습니다"
+stt_training.user_required: "사용자 id 가 필요합니다"
+stt_training.unknown_user: "id '{user_id}' 인 사용자를 찾을 수 없습니다"
+stt_training.unknown_lang: "언어 '{lang}' 의 문장 은행이 없습니다 (가능한 값: {available})"
+stt_training.unknown_prompt: "prompt id '{prompt_id}' 에 해당하는 문장을 찾을 수 없습니다"
+stt_training.sample_not_found: "id '{sample_id}' 인 판정 대기 샘플을 찾을 수 없습니다"
+stt_training.corrected_text_required: >-
+  correct 가 false 일 때는 corrected_text 가 필요합니다 — 정답 없는 "틀렸다"는
+  무엇을 고쳐야 할지 알 수 없습니다
+
+stt_training.read_store_failed: "낭독 교정 샘플 저장소를 사용할 수 없습니다"
+stt_training.read_store_not_configured: "stt_training.read_store_path 가 설정되지 않았습니다"
+stt_training.read_store_unreadable: >-
+  낭독 교정 샘플 저장소({path})를 읽지 못했습니다({reason}). 남은 것을 지키기 위해
+  손대지 않았습니다
+
+stt_training.verify_store_failed: "정오 판정 샘플 저장소를 사용할 수 없습니다"
+stt_training.verify_store_not_configured: "stt_training.verify_store_path 가 설정되지 않았습니다"
+stt_training.verify_store_unreadable: >-
+  정오 판정 샘플 저장소({path})를 읽지 못했습니다({reason}). 남은 것을 지키기 위해
+  손대지 않았습니다
+
 # ---- 그 밖 ------------------------------------------------------------------
 internal.error: "예상하지 못한 이유로 요청을 처리하지 못했습니다"
 http.error: "요청을 처리하지 못했습니다 ({status}): {detail}"

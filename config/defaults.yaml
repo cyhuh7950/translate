@@ -514,6 +514,87 @@ voice_samples:
   # 통짜 세션 전체를 저장하는 것은 목적에서 벗어난다. 0 이면 제한하지 않는다.
   max_sample_duration_s: 30
 
+# ---------------------------------------------------------------------------
+# STT 개인화 — 데이터 수집 (app/modules/stt_training) — DESIGN.md §16 0단계
+# ---------------------------------------------------------------------------
+#
+# 방법 A(파인튜닝)·방법 B(LLM 문맥 개인화) 둘 다의 재료를 모으는 단계다. 이 모듈
+# 자체는 그 재료를 어떻게 쓰는지 모른다 — 저장까지만 한다.
+#
+#   낭독 교정 — 서버가 미리 준비한 문장(아래 sentence_bank)을 하나씩 내주고,
+#     사용자가 그대로 읽은 음성을 (문장 텍스트, 음성) 확정쌍으로 저장한다.
+#   정오 판정 — 사용자가 자유롭게 말한 음성을 STT 로 돌려 인식 결과를 보여주고,
+#     사용자가 맞다/틀리다 판정한다. 판정 전까지는 임시 저장(pending) 상태다.
+stt_training:
+  # 문장 은행 — 언어별. id 는 전체(모든 언어 통틀어) 고유해야 한다 — read_sample
+  # 업로드가 prompt_id 하나만으로 어느 언어·어느 문장인지 찾아야 하기 때문이다
+  # (문장 텍스트가 아니라 id 로 추적해야, 나중에 문장을 다듬어도 사용자의 "이미
+  # 읽음" 이력이 깨지지 않는다). 문장은 짧고, 발음이 겹치지 않게 다양성을 주려고
+  # 골랐다(받침·이중모음·외래어·억양이 갈리는 문장 위주) — 정교한 음성학적 설계는
+  # 아니고 "그럭저럭 다양하다" 수준의 1차 목록이다. 언어를 늘리려면 이 아래에
+  # 키를 추가하면 된다(하드코딩된 언어 목록이 코드에는 없다).
+  sentence_bank:
+    ko:
+      - {id: ko-01, text: "오늘 날씨가 정말 좋네요."}
+      - {id: ko-02, text: "저는 매일 아침 커피를 마십니다."}
+      - {id: ko-03, text: "그 책은 도서관에 반납했어요."}
+      - {id: ko-04, text: "회의는 세 시에 시작합니다."}
+      - {id: ko-05, text: "김치찌개가 정말 맛있었어요."}
+      - {id: ko-06, text: "지하철역까지 걸어서 십 분 걸려요."}
+      - {id: ko-07, text: "이 서류에 서명해 주시겠어요?"}
+      - {id: ko-08, text: "내일은 휴일이라 회사에 안 가요."}
+      - {id: ko-09, text: "물 한 잔만 주시겠어요?"}
+      - {id: ko-10, text: "새로 산 노트북이 정말 가볍네요."}
+      - {id: ko-11, text: "다음 주 화요일에 다시 연락드릴게요."}
+      - {id: ko-12, text: "창문을 조금 열어도 될까요?"}
+      - {id: ko-13, text: "이 길로 쭉 가면 시청이 나옵니다."}
+      - {id: ko-14, text: "동생이 대학교에 합격했어요."}
+      - {id: ko-15, text: "요즘 운동을 꾸준히 하고 있어요."}
+    en:
+      - {id: en-01, text: "The weather is really nice today."}
+      - {id: en-02, text: "I drink coffee every morning."}
+      - {id: en-03, text: "I returned that book to the library."}
+      - {id: en-04, text: "The meeting starts at three o'clock."}
+      - {id: en-05, text: "This kimchi stew tastes amazing."}
+      - {id: en-06, text: "It takes ten minutes to walk to the station."}
+      - {id: en-07, text: "Could you sign this document, please?"}
+      - {id: en-08, text: "Tomorrow is a holiday, so I'm not going to work."}
+      - {id: en-09, text: "Could I get a glass of water?"}
+      - {id: en-10, text: "My new laptop is really lightweight."}
+      - {id: en-11, text: "I'll get back to you next Tuesday."}
+      - {id: en-12, text: "Would it be okay to open the window a little?"}
+      - {id: en-13, text: "Go straight down this road and you'll reach city hall."}
+      - {id: en-14, text: "My younger sibling got into university."}
+      - {id: en-15, text: "I've been exercising regularly these days."}
+
+  # `lang` 을 안 주는 요청(아래 next_prompt)이 기본으로 쓰는 언어.
+  default_lang: ko
+
+  # 목표 횟수 — 낭독 교정과 정오 판정은 서로 다른 활동이라 따로 센다.
+  required_read_count: 10
+  required_verify_count: 10
+
+  # 낭독 교정 저장소(문장+음성 확정쌍). `core/voice_samples.py` 와 의도적으로
+  # 다르다 — 거기는 사생활 보호로 전사문을 안 남기지만, 여기는 사용자가 이미
+  # 화면에서 본 정해진 문장을 그대로 읽은 것이라 텍스트를 같이 저장하는 것 자체가
+  # 목적이다(무엇을 재학습 재료로 쓸지는 이 모듈 밖의 일이다).
+  read_store_path: /data/stt_training_read.json
+  read_audio_dir: /data/stt_training_read
+
+  # 정오 판정 저장소(음성+STT 인식결과+판정+교정텍스트). verify 요청 시 판정 전
+  # 상태(pending)로 임시 저장되고, verdict 요청이 오면 확정된다.
+  verify_store_path: /data/stt_training_verify.json
+  verify_audio_dir: /data/stt_training_verify
+
+  # 판정 안 된 verify 임시 샘플의 만료 기간(시간). 사용자가 인식 결과를 보고도
+  # 판정을 끝내지 않고 이탈하는 경우, 누구인지도 불분명한 음성이 무기한 쌓이는
+  # 것을 막는다. 저장할 때마다(voice_samples.py 와 같은 방식으로) 정리한다.
+  verify_pending_ttl_hours: 24
+
+  # STT/TTS 호출에 쓸 라우팅 모드. 문제 하나·답변 하나 단위의 왕복이므로 배치를 쓴다
+  # (lang_learn 모듈과 같은 이유).
+  stt_mode: batch
+
 messages:
   # 오류 문구 카탈로그는 config/messages/<locale>.yaml 이다. 그 위치는 설정보다 먼저
   # 필요하므로(설정을 못 읽은 오류에도 문구가 있어야 한다) 코드가 안다 — 여기 없다.

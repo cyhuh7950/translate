@@ -66,7 +66,11 @@ session.done)까지 전부 정상 확인. `show_text_for_repeat=false` 설정도
 - **0단계**: 데이터 수집(`modules/stt_training` — 낭독교정 + 정오판정+교정텍스트) —
   **서버 구현·main 병합·실서버 반영 완료**(`3b69392`, `0ec771e`, 서버 최신 `03883a3`).
   앱도 서버 확정 계약(multipart WAV, 중첩 응답)에 맞춰 동기화했고 로컬 자동검증을 통과했다.
-- **1단계(우선)**: 방법 B — LLM 문맥 활용 개인화(오디오직결 LLM + 개인화 힌트)
+  API: `GET .../next_prompt`, `POST .../read_sample`, `POST .../verify`,
+  `POST .../verify/{id}/verdict`, `GET .../status`. `/v1/config`의 `stt_training`
+  섹션도 실서버에서 확인(languages: en/ko, 목표 개수 10/10). 회귀 확인 완료
+  (화자등록/사용자/lang_learn/번역 API 정상).
+- **1단계(우선)**: 방법 B — LLM 문맥 활용 개인화(오디오직결 LLM + 개인화 힌트) — 아직 미착수
 - **2단계(장기)**: 방법 A — 실제 파인튜닝. `translate`는 데이터 내보내기·사용자별 엔진
   라우팅만 맡고, 실제 학습·서빙은 `voice` 저장소(또는 외부 임대 서버) 쪽 — 누가 할지 미정
 
@@ -92,3 +96,5 @@ session.done)까지 전부 정상 확인. `show_text_for_repeat=false` 설정도
 - 정오 판정 업로드 경로와 운영 서버 응답은 확인했으나 인식 결과가 빈 문자열이라 판정은 보류(`0/10`). 실제 발화가 들어간 샘플로 재검증한다.
 - 앱쪽 세션과 연결이 복구되면: 언어학습 전체 흐름 실기기 검증 결과 확인
 - 앱쪽에 `PLAN_STT_PERSONALIZATION.md`의 0-A/1-A(앱 작업 항목) 전달 필요
+- 앱쪽에 `stt_training` 0단계 API 스펙 전달함(`MESSAGE_TO_APP.md`) — 0-A1~0-A4 작업 시작 가능
+- 5개 agent 동시 사고 이후 남은 `feature/stt-training`·`feature/translate-history` 잔재는 무해하지만 나중에 정리 필요
