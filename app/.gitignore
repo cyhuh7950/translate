@@ -32,7 +32,9 @@ local.properties
 *.hprof
 .cxx/
 *.keystore
-!debug.keystore
+*.jks
+*.p12
+*.pfx
 .kotlin/
 
 # node.js

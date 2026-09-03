@@ -2,6 +2,21 @@
 config/secrets.env
 *.key
 *.pem
+*.keystore
+*.jks
+*.p12
+*.pfx
+
+# 로컬 환경 파일과 비밀 설정
+.env
+.env.*
+!.env.example
+**/*.local.env
+
+# 공개 매뉴얼을 제외한 프로젝트 문서
+*.md
+!README.md
+!**/README.md
 
 # 서버별로 다른 설정 (필요 시 config/*.example 을 복사해 쓴다)
 config/*.local.yaml
