@@ -1,0 +1,218 @@
+name: Request-tag PR Broker
+
+on:
+  push:
+    branches:
+      - 'codex/pr-broker-bootstrap'
+    tags:
+      - 'pr-request/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-broker-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap-install:
+    if: github.ref == 'refs/heads/codex/pr-broker-bootstrap'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate installation files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/workflows/auto-pr-merge.yml
+          test -f .github/pr-broker-gate.sh
+          bash -n .github/pr-broker-gate.sh
+          git diff --check
+
+      - name: Create or reuse bootstrap pull request
+        id: bootstrap-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_url="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head codex/pr-broker-bootstrap \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head codex/pr-broker-bootstrap \
+              --title "Install request-tag PR Broker" \
+              --body "One-time installation of the trusted request-tag PR Broker.")"
+          fi
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Merge bootstrap pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.bootstrap-pr.outputs.url }}
+        shell: bash
+        run: gh pr merge "$PR_URL" --squash --delete-branch
+
+      - name: Verify bootstrap merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.bootstrap-pr.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gh pr view "$PR_URL" --json state --jq '.state')"
+          if [[ "$state" != "MERGED" ]]; then
+            echo "Bootstrap PR state is not MERGED: $state" >&2
+            exit 1
+          fi
+          merge_sha="$(gh pr view "$PR_URL" --json mergeCommit --jq '.mergeCommit.oid')"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$merge_sha" refs/remotes/origin/main
+
+  validate-create-merge:
+    if: startsWith(github.ref, 'refs/tags/pr-request/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted Broker revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          request="${GITHUB_REF_NAME#pr-request/}"
+          head_sha="${request%%/*}"
+          head_branch="${request#*/}"
+
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Request tag must contain a full 40-character lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$head_branch" =~ ^codex/[A-Za-z0-9._/-]+$ ]]; then
+            echo "Only codex/* work branches are accepted" >&2
+            exit 1
+          fi
+          git check-ref-format "refs/heads/$head_branch"
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$head_branch:refs/remotes/origin/$head_branch"
+
+          broker_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          remote_head="$(git rev-parse "refs/remotes/origin/$head_branch")"
+
+          if [[ "$broker_sha" != "$main_sha" ]]; then
+            echo "Request tag does not point to the current trusted main Broker revision" >&2
+            exit 1
+          fi
+          if [[ "$remote_head" != "$head_sha" ]]; then
+            echo "Requested SHA is not the current remote work-branch HEAD" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor "$main_sha" "$head_sha"
+
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "head_branch=$head_branch" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+          echo "broker_sha=$broker_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Run repository gate from trusted Broker revision
+        env:
+          BROKER_SHA: ${{ steps.request.outputs.broker_sha }}
+          HEAD_BRANCH: ${{ steps.request.outputs.head_branch }}
+          HEAD_SHA: ${{ steps.request.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$BROKER_SHA:.github/pr-broker-gate.sh" > "$RUNNER_TEMP/pr-broker-gate.sh"
+          git checkout -B "$HEAD_BRANCH" "$HEAD_SHA"
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          bash "$RUNNER_TEMP/pr-broker-gate.sh"
+
+      - name: Revalidate base and branch immediately before PR
+        env:
+          EXPECTED_MAIN: ${{ steps.request.outputs.main_sha }}
+          HEAD_BRANCH: ${{ steps.request.outputs.head_branch }}
+          HEAD_SHA: ${{ steps.request.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/$HEAD_BRANCH:refs/remotes/origin/$HEAD_BRANCH"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN"
+          remote_head="$(git rev-parse "refs/remotes/origin/$HEAD_BRANCH")"
+          test "$remote_head" = "$HEAD_SHA"
+
+      - name: Create or reuse pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ steps.request.outputs.head_branch }}
+          HEAD_SHA: ${{ steps.request.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_url="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$HEAD_BRANCH" \
+              --title "Merge $HEAD_BRANCH" \
+              --body "PR Broker request for exact head $HEAD_SHA. The request tag declares that the approved Stage implementation and required verification are complete; it does not declare the whole project complete.")"
+          fi
+
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Merge pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        shell: bash
+        run: gh pr merge "$PR_URL" --squash --delete-branch
+
+      - name: Verify merged main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gh pr view "$PR_URL" --json state --jq '.state')"
+          if [[ "$state" != "MERGED" ]]; then
+            echo "PR state is not MERGED: $state" >&2
+            exit 1
+          fi
+          merge_sha="$(gh pr view "$PR_URL" --json mergeCommit --jq '.mergeCommit.oid')"
+          test -n "$merge_sha"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$merge_sha" refs/remotes/origin/main
+
+      - name: Remove completed request tag
+        shell: bash
+        run: git push origin ":refs/tags/$GITHUB_REF_NAME"
