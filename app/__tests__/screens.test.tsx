@@ -25,6 +25,7 @@ import App from '../App';
 import { frameBytes, frameSamples } from '../src/api';
 import type { ModelsResponse, ServerConfig } from '../src/api';
 import { ConnectScreen } from '../ui/ConnectScreen';
+import { EnrollScreen } from '../ui/EnrollScreen';
 import { LiveScreen } from '../ui/LiveScreen';
 import { SettingsScreen } from '../ui/SettingsScreen';
 import { buildFields, streamConfig } from '../ui/settings';
@@ -213,6 +214,14 @@ describe('화면 렌더', () => {
     });
   });
 
+  it('EnrollScreen 이 그려진다', async () => {
+    await ReactTestRenderer.act(() => {
+      ReactTestRenderer.create(
+        <EnrollScreen {...common} config={null} onConfig={() => {}} form={{}} />,
+      );
+    });
+  });
+
   it('SettingsScreen 이 그려진다 (설정을 아직 못 받은 상태)', async () => {
     await ReactTestRenderer.act(() => {
       ReactTestRenderer.create(
@@ -266,6 +275,12 @@ describe('화면 렌더', () => {
     // 실시간 통역은 메인 탭 그대로다.
     const live = tab('실시간 통역');
     expect(live).toBeDefined();
+
+    const enroll = tab('화자 등록');
+    expect(enroll).toBeDefined();
+    await ReactTestRenderer.act(() => {
+      enroll!.props.onPress();
+    });
     await ReactTestRenderer.act(() => {
       live!.props.onPress();
     });

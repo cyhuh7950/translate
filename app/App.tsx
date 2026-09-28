@@ -46,6 +46,7 @@ import appConfig from './app.config.json';
 import { ApiError, StreamError } from './src/api';
 import type { ApiClient, FetchLike, ModelsResponse, ServerConfig } from './src/api';
 import { ConnectScreen } from './ui/ConnectScreen';
+import { EnrollScreen } from './ui/EnrollScreen';
 import { FaceToFaceScreen } from './ui/FaceToFaceScreen';
 import { LangLearnSettingsScreen } from './ui/LangLearnSettingsScreen';
 import { LearnScreen } from './ui/LearnScreen';
@@ -102,7 +103,7 @@ type AppMode = 'translate' | 'interpret';
  * 설정은 한데 모아 별도 팝업(⚙️ 버튼 → `Modal`)에서 처리한다 — 여섯 개를 한 줄에
  * 다 욱여넣으면 글자가 두 줄로 깨진다(실기기 실측).
  */
-type FeatureTab = 'connect' | 'live' | 'learn';
+type FeatureTab = 'connect' | 'live' | 'learn' | 'enroll';
 type SettingsTab = 'settings' | 'learnSettings' | 'login' | 'sttTraining';
 
 /** 탭 표시 방식. 아이콘은 새 의존성 없이 이모지로 그린다. */
@@ -121,6 +122,7 @@ const FEATURE_TABS: TabMeta<FeatureTab>[] = [
   { id: 'live', label: '실시간 통역', icon: '🎙️' },
   // 언어 학습 세션 (DESIGN.md §15). 번역 기능과 무관해 맨 뒤에 둔다.
   { id: 'learn', label: '학습 세션', icon: '📝' },
+  { id: 'enroll', label: '화자 등록', icon: '🎧' },
 ];
 
 const SETTINGS_TABS: TabMeta<SettingsTab>[] = [
@@ -372,6 +374,9 @@ function Root({ isDark }: { isDark: boolean }) {
           <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />
         )}
         {tab === 'learn' && <LearnScreen {...shared} user={user} onConfig={setConfig} />}
+        {tab === 'enroll' && (
+          <EnrollScreen {...shared} config={config} onConfig={setConfig} form={form} />
+        )}
       </View>
 
       <Modal

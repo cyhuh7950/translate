@@ -328,3 +328,46 @@ function downmix(interleaved: Float32Array<ArrayBuffer>, channels: number): Floa
   }
   return out;
 }
+
+/* ---- 화자 등록 클립 쓰기 ------------------------------------------------------
+ *
+ * 화자 등록(`/v1/speakers/enroll`)은 캡처와 반대 방향이다 — 마이크가 준 PCM16 프레임을
+ * 모아 서버에 파일로 올려야 한다. 여기 두 함수가 그 변환을 맡는다. 둘 다 순수 계산이고,
+ * `readWav()` 가 읽는 것과 정확히 대칭이 되는 것을 `__tests__/pcm.test.ts` 의 왕복
+ * (encode → decode) 테스트로 확인한다.
+ */
+
+/** `MicCapture.onFrame` 이 준 PCM16 프레임(ArrayBuffer) 여러 개를 하나로 이어붙인다. */
+export function concatPcm16(frames: ArrayBuffer[]): Int16Array {
+  let total = 0;
+  for (const frame of frames) total += frame.byteLength / 2;
+  const out = new Int16Array(total);
+  let at = 0;
+  for (const frame of frames) {
+    const chunk = new Int16Array(frame);
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
+}
+
+/**
+ * 순수 base64 인코더. RN 에는 `btoa` 가 없고(JS 엔진에 따라 없을 수 있다), 이 인코딩
+ * 하나를 위해 의존성을 늘리지 않으려고 직접 짰다 — 등록 클립을 `data:` URI 로 감싸
+ * RN 의 `FormData` 에 올릴 때 쓴다(`ui/EnrollScreen.tsx`). 3바이트씩 훑으며 문자만
+ * 이어 붙이므로 긴 클립에서도 계산량은 선형이다.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  const len = bytes.length;
+  for (let i = 0; i < len; i += 3) {
+    const b0 = bytes[i] as number;
+    const b1 = i + 1 < len ? (bytes[i + 1] as number) : 0;
+    const b2 = i + 2 < len ? (bytes[i + 2] as number) : 0;
+    out += BASE64_CHARS[b0 >> 2];
+    out += BASE64_CHARS[((b0 & 0x3) << 4) | (b1 >> 4)];
+    out += i + 1 < len ? BASE64_CHARS[((b1 & 0xf) << 2) | (b2 >> 6)] : '=';
+    out += i + 2 < len ? BASE64_CHARS[b2 & 0x3f] : '=';
+  }
+  return out;
+}
