@@ -77,8 +77,9 @@ class EnergyVad:
         self._max_frames = self._frames_for(max_speech_ms) if max_speech_ms > 0 else 0
 
         # 잡음 바닥의 초기 추정치. 실제 무음이 들어오면 곧 갱신된다.
-        self._noise = self._threshold
         self._noise_ratio = 10.0 ** (self._noise_margin_db / 20.0)
+        # 첫 발화도 설정된 threshold로 판정한다. 실제 무음으로만 바닥을 학습한다.
+        self._noise = self._threshold / self._noise_ratio
 
         self._tail = np.empty(0, dtype=np.int16)     # 프레임을 못 채운 나머지
         self._pre: deque[np.ndarray] = deque(maxlen=self._pre_frames or 1)
@@ -104,6 +105,11 @@ class EnergyVad:
     def frame_ms(self) -> int:
         """클라이언트에 권장 프레임 길이를 알려줄 때 쓴다."""
         return self._frame_ms
+
+    @property
+    def has_pending_speech(self) -> bool:
+        """시작 판정 대기 중인 첫 음절도 출력 전환에서 보호한다."""
+        return self._in_speech or self._voiced_run > 0
 
     def push(self, pcm: np.ndarray) -> list[VadEvent]:
         """길이 제한 없는 int16 mono 배열을 넣는다. 발생한 이벤트를 순서대로 돌려준다."""
@@ -132,6 +138,8 @@ class EnergyVad:
         self._tail = np.empty(0, dtype=np.int16)
         if self._in_speech:
             events.append(self._finish("flush"))
+        self._voiced_run = 0
+        self._pre.clear()
         return events
 
     # ---- 판정 -------------------------------------------------------------

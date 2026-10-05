@@ -187,6 +187,7 @@ export class StreamSession {
     this.socket = socket;
 
     socket.onopen = () => {
+      if (this.state !== 'connecting') return;
       this.state = 'open';
       // 서버는 첫 메시지가 config 가 아니면 끊는다. 그래서 여는 즉시 보낸다.
       this.sendMessage(this.options.config);
@@ -194,6 +195,7 @@ export class StreamSession {
     };
 
     socket.onmessage = (event: any) => {
+      if (this.state === 'closed') return;
       const data = event && event.data;
       if (typeof data === 'string') {
         this.onText(data);
@@ -203,6 +205,7 @@ export class StreamSession {
     };
 
     socket.onerror = (error: any) => {
+      if (this.state === 'closed') return;
       if (this.options.onSocketError) this.options.onSocketError(error);
     };
 
@@ -247,10 +250,16 @@ export class StreamSession {
   }
 
   close(code?: number, reason?: string): void {
-    if (this.socket && this.state !== 'closed') {
-      this.socket.close(code, reason);
-    }
+    if (this.state === 'closed') return;
     this.state = 'closed';
+    this.pendingChunk = null;
+    // ready 대기만 먼저 해제한다. 종료 통지는 실제 소켓 종료 이벤트를 유지한다.
+    if (this.readyReject) {
+      this.readyReject(new StreamClosedError(code, reason));
+      this.readyResolve = null;
+      this.readyReject = null;
+    }
+    if (this.socket) this.socket.close(code, reason);
   }
 
   /* ---- 내부 --------------------------------------------------------------- */
@@ -329,6 +338,7 @@ export class StreamSession {
   private finish(info: StreamCloseInfo): void {
     if (this.state === 'closed' && this.closeInfo) return;
     this.state = 'closed';
+    this.pendingChunk = null;
     this.closeInfo = info;
     if (this.readyReject) {
       this.readyReject(new StreamClosedError(info.code, info.reason));
