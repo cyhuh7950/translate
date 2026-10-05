@@ -90,8 +90,8 @@ llm:
   #   거기서 프로바이더 9곳을 조회하면 앱 시작이 그만큼 늦어진다. 목록은 필요한
   #   화면(설정)이 따로 부른다.
   #
-  # providers.yaml 의 default_model 은 그대로 남는다 — 조회가 실패해도 번역은
-  # 돌아가야 하므로 폴백이다.
+  # providers.yaml 의 default_model 은 목록 조회 실패 시 화면에 보여 줄 메타데이터다.
+  # 실제 요청의 모델 생략·자동 선택은 provider의 model_policy가 결정한다.
 
   # 조회 결과를 재사용하는 시간(초). 프로바이더 목록은 하루에 몇 번 바뀌는 것이
   # 아니라 길게 잡아도 된다. 0 이면 캐시하지 않는다(요청마다 전부 다시 조회한다).
@@ -671,7 +671,7 @@ lang_learn:
 
   llm:
     provider: null   # null 이면 llm.default_provider
-    model: null       # null 이면 그 프로바이더의 default_model
+    model: null       # null 이면 provider의 모델 정책(생략 또는 auto)을 따른다
 
   stream:
     path: /v1/lang_learn/stream

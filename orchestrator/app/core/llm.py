@@ -232,8 +232,9 @@ class ProviderRegistry:
         """
         `/v1/models` 응답에 실을 모양. 문구는 카탈로그가 만든다 — 여기 문장이 없다.
 
-        `default_model` 을 함께 싣는 이유는 목록 조회가 실패해도 클라이언트가 무엇이
-        쓰일지는 알 수 있어야 하기 때문이다. 그것이 폴백이다.
+        `default_model` 을 함께 싣는 이유는 목록 조회가 실패해도 클라이언트에
+        provider의 대표 모델 정보를 보여 줄 수 있어야 하기 때문이다. 실제 요청에서
+        모델을 생략할 때의 동작은 adapter의 provider 정책이 결정한다.
         """
         now = time.monotonic()
         providers = self._cfg.require_section("providers")

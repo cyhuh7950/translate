@@ -72,6 +72,15 @@ class BaseLLM:
             raise LLMError("llm.no_model", status=400, provider=self.id)
         return model
 
+    def resolve_openai_model(self, requested: str | None) -> str | None:
+        """Resolve an OpenAI-compatible request's optional model field."""
+        model = (requested or "").strip()
+        if model:
+            return model
+        if self.spec.get("model_policy") == "auto":
+            return "auto"
+        return None
+
     def _timeout(self) -> httpx.Timeout:
         total = float(self.settings.get("request_timeout_s"))
         return httpx.Timeout(total, connect=min(10.0, total))
