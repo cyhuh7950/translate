@@ -130,6 +130,8 @@ class StreamHandler:
         self._worker: asyncio.Task | None = None
         self._current: asyncio.Task | None = None
         self._closing = False
+        self._input_idle = asyncio.Event()
+        self._input_idle.set()
 
     # ---- 송신 -------------------------------------------------------------
 
@@ -379,12 +381,20 @@ class StreamHandler:
         except Exception as exc:
             await self._error(VadError("vad.failed", error=type(exc).__name__, reason=exc))
             return
+        self._update_input_idle()
         await self._emit_vad(events)
+
+    def _update_input_idle(self) -> None:
+        if self._vad is not None and self._vad.has_pending_speech:
+            self._input_idle.clear()
+        else:
+            self._input_idle.set()
 
     async def _drain_vad(self, *, force: bool) -> None:
         if self._vad is None:
             return
         events = self._vad.flush()
+        self._update_input_idle()
         if force:
             for e in events:
                 e.reason = "forced"
@@ -426,6 +436,7 @@ class StreamHandler:
                 break
         if self._vad is not None:
             self._vad.flush()
+        self._update_input_idle()
         self._turn_state.delivering = False
         self._deliver_until = 0.0
         await self._send({"type": "cancelled", **self._route()})
@@ -660,8 +671,14 @@ class StreamHandler:
             audio = payload.pop("audio", None)
             seq = payload.pop("seq", 0)
             if audio:
-                await self._send({"type": "tts.chunk", "seq": seq, **payload}, audio=audio)
+                # half_duplex에서도 처리 중 이미 시작한 다음 발화는 끝까지 받는다.
+                # 수신 루프는 계속 돌며 VAD 종료/flush/cancel이 이 대기를 해제한다.
+                if not self._turn.accepts_audio(TurnState(delivering=True)):
+                    while self._vad.has_pending_speech:
+                        await self._input_idle.wait()
+                # 송신 중에도 수신 루프가 돌 수 있으므로 에코 차단을 먼저 적용한다.
                 self._mark_delivering(payload.get("duration"))
+                await self._send({"type": "tts.chunk", "seq": seq, **payload}, audio=audio)
             await self._send({
                 "type": "tts.done",
                 "seg": payload.get("seg"),
@@ -678,8 +695,8 @@ class StreamHandler:
         서버는 스피커를 볼 수 없으므로 보낸 오디오 길이로 재생 구간을 추정한다.
         클라이언트가 control/playback 을 보내주면 그 값이 이 추정을 덮는다.
         """
-        if not duration:
-            return
         grace = float(self._cfg.get("turn.playback_grace_s"))
         self._turn_state.delivering = True
-        self._deliver_until = asyncio.get_running_loop().time() + float(duration) + grace
+        self._deliver_until = (
+            asyncio.get_running_loop().time() + float(duration) + grace if duration else 0.0
+        )

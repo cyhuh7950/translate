@@ -28,6 +28,7 @@ const state = {
   form: {},          // 사용자가 고른 값. 키는 API 파라미터 이름과 같다.
   inputMode: null,   // 지금 활성화된 입력 방식. 목록·기본값은 /v1/config 가 준다.
   stream: null,
+  streamPromise: null,
   recorder: null,
   recording: false,
   busy: false,
@@ -500,10 +501,15 @@ function recorderSupported() {
 async function micStream() {
   if (state.stream && state.stream.active) return state.stream;
   // 스피커 소리가 마이크로 되돌아오는 것을 브라우저 단에서 한 번 막는다.
-  state.stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-  });
-  return state.stream;
+  if (!state.streamPromise) {
+    state.streamPromise = navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    }).then(stream => {
+      state.stream = stream;
+      return stream;
+    }).finally(() => { state.streamPromise = null; });
+  }
+  return state.streamPromise;
 }
 
 /** MediaRecorder 가 고른 컨테이너에서 확장자를 뽑는다. 포맷 목록을 코드에 두지 않기 위해. */
@@ -715,6 +721,7 @@ const CAPTURE_PROCESSOR = 'capture-processor';
 const LEVEL_FLOOR_DB = 60;
 
 const hf = {
+  generation: 0,
   ws: null,
   ctx: null,          // 캡처용 AudioContext (stt_sample_rate)
   node: null,         // AudioWorkletNode
@@ -798,6 +805,7 @@ async function hfStart() {
   if (!state.config) { setStatus(t('error.config', { message: '' }), 'error'); return; }
 
   hf.running = true;
+  const generation = ++hf.generation;
   hfButton();
   hfState('connecting');
   setStatus('');
@@ -808,9 +816,15 @@ async function hfStart() {
 
   try {
     const mic = await micStream();
+    if (generation !== hf.generation) {
+      releaseMicIfIdle();
+      return;
+    }
     hf.ctx = audioContextAt(rate);
     if (hf.ctx.state === 'suspended') await hf.ctx.resume();
+    if (generation !== hf.generation) return;
     await hf.ctx.audioWorklet.addModule(CAPTURE_WORKLET_URL);
+    if (generation !== hf.generation) return;
 
     hf.node = new AudioWorkletNode(hf.ctx, CAPTURE_PROCESSOR, {
       numberOfInputs: 1,
@@ -831,6 +845,7 @@ async function hfStart() {
     hf.node.connect(hf.sink);
     hf.sink.connect(hf.ctx.destination);
   } catch (err) {
+    if (generation !== hf.generation) return;
     setStatus(t('error.mic', { message: err.message }), 'error');
     hfStop();
     return;
@@ -845,21 +860,27 @@ async function hfStart() {
     return;
   }
 
-  hf.ws.addEventListener('open', () => hfSend(hfConfigMessage(rate)));
+  const ws = hf.ws;
+  const current = () => generation === hf.generation && hf.ws === ws;
+  hf.ws.addEventListener('open', () => {
+    if (current()) hfSend(hfConfigMessage(rate));
+  });
   hf.ws.addEventListener('message', (event) => {
+    if (!current()) return;
     if (typeof event.data === 'string') hfEvent(event.data);
     else hfAudio(event.data);
   });
   // WebSocket 의 error 이벤트에는 이유가 없다(브라우저가 감춘다). 이유는 서버가
   // error 이벤트로 주고, 그마저 못 받으면 바로 뒤따르는 close 가 알린다.
   hf.ws.addEventListener('close', () => {
-    if (!hf.running) return;
+    if (!current() || !hf.running) return;
     setStatus(t('error.stream_closed'), 'error');
     hfStop();
   });
 }
 
 function hfStop() {
+  hf.generation += 1;
   hf.running = false;
   hf.ready = false;
   hf.pendingChunk = null;

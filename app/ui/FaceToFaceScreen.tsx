@@ -92,12 +92,15 @@ export function FaceToFaceScreen({
   const speakerSideRef = useRef<Side | null>(null);
   const langRef = useRef({ top: '', bottom: '' });
   const langsResolvedRef = useRef(false);
+  const connectionGeneration = useRef(0);
 
   const setSideText = useCallback((side: Side, value: string) => {
     setText(prev => ({ ...prev, [side]: value }));
   }, []);
 
   const teardownSession = useCallback(() => {
+    connectionGeneration.current += 1;
+    pressingRef.current = null;
     sendingRef.current = false;
     if (captureRef.current) {
       captureRef.current.stop();
@@ -106,8 +109,9 @@ export function FaceToFaceScreen({
     if (playerRef.current) playerRef.current.dispose();
     playerRef.current = null;
     if (sessionRef.current) {
-      sessionRef.current.close();
+      const session = sessionRef.current;
       sessionRef.current = null;
+      session.close();
     }
     speakerSideRef.current = null;
   }, []);
@@ -116,10 +120,9 @@ export function FaceToFaceScreen({
   useEffect(() => teardownSession, [teardownSession]);
 
   /** 발화자가 `side` 인 세션을 새로 연다. 기존 세션이 있으면 먼저 닫는다. */
-  async function openSessionFor(client: ApiClient, side: Side): Promise<void> {
-    teardownSession();
-
+  async function openSessionFor(client: ApiClient, side: Side, generation: number): Promise<void> {
     const config = await fetchConfig(client);
+    if (generation !== connectionGeneration.current) return;
     if (onConfig) onConfig(config);
 
     if (!langsResolvedRef.current) {
@@ -158,6 +161,9 @@ export function FaceToFaceScreen({
         new WebSocket(url, protocols, { headers }) as unknown as WebSocketLike,
       config: message,
       handlers: {
+        vad: event => {
+          if (event.dropped) setError('발화가 너무 짧아 처리되지 않았습니다. 다시 말씀해 주세요.');
+        },
         'stt.final': event => setSideText(side, event.text || ''),
         'llm.final': event => {
           setSideText(listener, event.text || '');
@@ -170,7 +176,7 @@ export function FaceToFaceScreen({
       onWarning: () => {},
       onSocketError: () => setError('WebSocket 오류가 났다.'),
       onClose: info => {
-        if (!sessionRef.current) return; // 우리가 닫은 것이다
+        if (sessionRef.current !== session) return;
         setError(`스트림이 닫혔다 (code=${info.code ?? '-'}, reason=${info.reason || '-'}).`);
         teardownSession();
         setPhase('idle');
@@ -180,6 +186,7 @@ export function FaceToFaceScreen({
     speakerSideRef.current = side;
 
     await session.whenReady();
+    if (generation !== connectionGeneration.current || sessionRef.current !== session) return;
 
     const capture = new MicCapture(
       {
@@ -201,6 +208,8 @@ export function FaceToFaceScreen({
 
   async function onPressIn(side: Side) {
     if (pressingRef.current) return; // 이미 한쪽을 누르고 있다
+    if (speakerSideRef.current !== side) teardownSession();
+    const generation = connectionGeneration.current;
     pressingRef.current = side;
     setPressingSide(side);
     setError('');
@@ -216,6 +225,7 @@ export function FaceToFaceScreen({
     if (phase === 'idle') {
       setPhase('permission');
       const denied = await requestMic();
+      if (generation !== connectionGeneration.current) return;
       if (denied) {
         setError(denied);
         setPhase('idle');
@@ -228,9 +238,11 @@ export function FaceToFaceScreen({
     if (speakerSideRef.current !== side) {
       setPhase('connecting');
       try {
-        await openSessionFor(client, side);
+        await openSessionFor(client, side, generation);
       } catch (err) {
+        if (generation !== connectionGeneration.current) return;
         setError(errorText(err));
+        teardownSession();
         setPhase('idle');
         pressingRef.current = null;
         setPressingSide(null);
@@ -238,7 +250,7 @@ export function FaceToFaceScreen({
       }
     }
 
-    if (pressingRef.current !== side) {
+    if (generation !== connectionGeneration.current || pressingRef.current !== side) {
       // 여는 사이에 이미 뗐다.
       return;
     }
@@ -248,12 +260,13 @@ export function FaceToFaceScreen({
     try {
       await capture.start();
     } catch (err) {
+      if (generation !== connectionGeneration.current) return;
       setError(errorText(err));
       pressingRef.current = null;
       setPressingSide(null);
       return;
     }
-    if (pressingRef.current !== side) {
+    if (generation !== connectionGeneration.current || pressingRef.current !== side) {
       capture.stop();
       return;
     }

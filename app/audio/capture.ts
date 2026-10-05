@@ -67,6 +67,10 @@ export class MicCapture {
   private resampler: LinearResampler | null = null;
   /** 리샘플 통지를 한 번만 띄우기 위한 표시. */
   private noticedRate = 0;
+  private generation = 0;
+  private starting: Promise<void> | null = null;
+  // 화면/세션 교체로 새 MicCapture가 만들어져도 이전 네이티브 정지를 기다린다.
+  private static stopping: Promise<void> | null = null;
 
   constructor(
     private readonly spec: CaptureSpec,
@@ -76,8 +80,22 @@ export class MicCapture {
   }
 
   /** 마이크를 연다. 실패하면 던진다 — 문장은 라이브러리가 준 것이다. */
-  async start(): Promise<void> {
-    if (this.recorder) return;
+  start(): Promise<void> {
+    if (this.starting) return this.starting;
+    if (this.recorder) return Promise.resolve();
+    const generation = ++this.generation;
+    const starting = this.startRecorder(generation);
+    this.starting = starting;
+    const clear = () => {
+      if (this.starting === starting) this.starting = null;
+    };
+    starting.then(clear, clear);
+    return starting;
+  }
+
+  private async startRecorder(generation: number): Promise<void> {
+    if (MicCapture.stopping) await MicCapture.stopping;
+    if (generation !== this.generation) return;
 
     // 여기가 네이티브 모듈을 실제로 설치하는 지점이다 (audio/module.ts 를 볼 것).
     const recorder = new (audioApi().AudioRecorder)();
@@ -102,6 +120,7 @@ export class MicCapture {
     }
 
     recorder.onError(event => {
+      if (generation !== this.generation) return;
       if (this.handlers.onError) this.handlers.onError(event.message);
     });
 
@@ -111,7 +130,9 @@ export class MicCapture {
         bufferLength: this.spec.frameSamples,
         channelCount: this.spec.channels,
       },
-      event => this.onBuffer(event.buffer),
+      event => {
+        if (generation === this.generation) this.onBuffer(event.buffer);
+      },
     );
     const registerError = failureOf(registered);
     if (registerError !== null) {
@@ -120,6 +141,7 @@ export class MicCapture {
     }
 
     const started = await recorder.start();
+    if (generation !== this.generation) return;
     const startError = failureOf(started);
     if (startError !== null) {
       this.stop();
@@ -128,6 +150,9 @@ export class MicCapture {
   }
 
   stop(): void {
+    this.generation += 1;
+    const starting = this.starting;
+    this.starting = null;
     const recorder = this.recorder;
     this.recorder = null;
     this.resampler = null;
@@ -140,12 +165,22 @@ export class MicCapture {
     } catch {
       // 이미 정리된 경우. 여기서 죽을 이유가 없다.
     }
-    // stop() 은 프라미스를 준다. 결과를 기다릴 이유가 없어 흘려보내되 거부는 삼킨다.
-    Promise.resolve(recorder.stop()).catch(() => undefined);
+    // 늦게 완료된 start가 stop 이후 녹음을 다시 켜지 않게 순서를 지킨다.
+    const stopping = Promise.resolve(starting)
+      .catch(() => undefined)
+      .then(() => recorder.stop())
+      .then(() => undefined, () => undefined);
+    MicCapture.stopping = stopping;
+    stopping.then(() => {
+      if (MicCapture.stopping === stopping) MicCapture.stopping = null;
+    });
   }
 
   /** 녹음을 멈추고 네이티브가 만든 파일 URI를 돌려준다. */
   async stopWithFile(): Promise<string | null> {
+    this.generation += 1;
+    const starting = this.starting;
+    this.starting = null;
     const recorder = this.recorder;
     this.recorder = null;
     this.resampler = null;
@@ -158,7 +193,13 @@ export class MicCapture {
     } catch {
       // 이미 정리된 경우. 그래도 stop 결과는 확인한다.
     }
-    const result = await recorder.stop();
+    const stopped = Promise.resolve(starting).catch(() => undefined).then(() => recorder.stop());
+    const stopping = stopped.then(() => undefined, () => undefined);
+    MicCapture.stopping = stopping;
+    stopping.then(() => {
+      if (MicCapture.stopping === stopping) MicCapture.stopping = null;
+    });
+    const result = await stopped;
     const error = failureOf(result);
     if (error !== null) throw new Error(error || '녹음 파일을 저장하지 못했다.');
     const paths = (result as { paths?: string[] }).paths;

@@ -89,3 +89,90 @@ test('파일 출력 모드에서는 네이티브 WAV 경로를 돌려준다', as
     api.AudioRecorder.prototype.stop = originalStop;
   }
 });
+
+test('시작 대기 중 stop은 네이티브 시작 완료 뒤에 정리한다', async () => {
+  const api = require('react-native-audio-api');
+  let finish!: () => void;
+  const order: string[] = [];
+  const startSpy = jest.spyOn(api.AudioRecorder.prototype, 'start').mockImplementation(async () => {
+    await new Promise<void>(resolve => { finish = resolve; });
+    order.push('started');
+    return { status: 'success' };
+  });
+  const stopSpy = jest.spyOn(api.AudioRecorder.prototype, 'stop').mockImplementation(async () => {
+    order.push('stopped');
+    return { status: 'success' };
+  });
+  try {
+    const capture = new MicCapture({ sampleRate: 16000, channels: 1, frameSamples: 320 }, { onFrame: () => {} });
+    const started = capture.start();
+    await Promise.resolve();
+    capture.stop();
+    finish();
+    await started;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toEqual(['started', 'stopped']);
+    expect(capture.running).toBe(false);
+  } finally {
+    startSpy.mockRestore();
+    stopSpy.mockRestore();
+  }
+});
+
+test('빠른 재접속의 새 캡처는 이전 캡처 정지가 끝난 뒤 시작한다', async () => {
+  const api = require('react-native-audio-api');
+  let finishFirst!: () => void;
+  let starts = 0;
+  const order: string[] = [];
+  const startSpy = jest.spyOn(api.AudioRecorder.prototype, 'start').mockImplementation(async () => {
+    starts += 1;
+    if (starts === 1) await new Promise<void>(resolve => { finishFirst = resolve; });
+    order.push('start');
+    return { status: 'success' };
+  });
+  const stopSpy = jest.spyOn(api.AudioRecorder.prototype, 'stop').mockImplementation(async () => {
+    order.push('stop');
+    return { status: 'success' };
+  });
+  const spec = { sampleRate: 16000, channels: 1, frameSamples: 320 };
+  const first = new MicCapture(spec, { onFrame: () => {} });
+  const second = new MicCapture(spec, { onFrame: () => {} });
+  try {
+    const openingFirst = first.start();
+    await Promise.resolve();
+    first.stop();
+    const openingSecond = second.start();
+    await Promise.resolve();
+    const startsBeforeFirstFinished = starts;
+    finishFirst();
+    await Promise.all([openingFirst, openingSecond]);
+    expect(startsBeforeFirstFinished).toBe(1);
+    expect(order).toEqual(['start', 'stop', 'start']);
+  } finally {
+    second.stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    startSpy.mockRestore();
+    stopSpy.mockRestore();
+  }
+});
+
+test('정지 후 뒤늦은 네이티브 오디오 콜백은 프레임을 보내지 않는다', async () => {
+  const api = require('react-native-audio-api');
+  let callback!: (event: { buffer: unknown }) => void;
+  const ready = jest.spyOn(api.AudioRecorder.prototype, 'onAudioReady').mockImplementation((_options, listener) => {
+    callback = listener as typeof callback;
+    return { status: 'success' };
+  });
+  const onFrame = jest.fn();
+  const capture = new MicCapture({ sampleRate: 16000, channels: 1, frameSamples: 320 }, { onFrame });
+  try {
+    await capture.start();
+    capture.stop();
+    callback({ buffer: { sampleRate: 16000, numberOfChannels: 1, getChannelData: () => new Float32Array(320) } });
+    expect(onFrame).not.toHaveBeenCalled();
+  } finally {
+    ready.mockRestore();
+  }
+});

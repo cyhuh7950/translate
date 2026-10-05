@@ -215,6 +215,7 @@ export function LiveScreen({
   const sendingRef = useRef(false);
   /** 버튼을 누르고 있는가. 렌더를 기다리지 않는 판단은 전부 이 값으로 한다. */
   const pressingRef = useRef(false);
+  const connectionGeneration = useRef(0);
 
   const addNotice = useCallback((message: string) => {
     setNotices(prev => (prev.includes(message) ? prev : [message, ...prev].slice(0, MAX_TURNS)));
@@ -239,6 +240,7 @@ export function LiveScreen({
   }, []);
 
   const teardown = useCallback(() => {
+    connectionGeneration.current += 1;
     // 문을 먼저 닫는다. 아래에서 캡처를 멈추는 사이에 올라온 버퍼도 나가지 않게.
     sendingRef.current = false;
     pressingRef.current = false;
@@ -249,8 +251,9 @@ export function LiveScreen({
     }
     if (playerRef.current) playerRef.current.stop();
     if (sessionRef.current) {
-      sessionRef.current.close();
+      const session = sessionRef.current;
       sessionRef.current = null;
+      session.close();
     }
     playingRef.current = false;
     setPhase('idle');
@@ -306,6 +309,9 @@ export function LiveScreen({
       return;
     }
 
+    teardown();
+    const generation = connectionGeneration.current;
+
     setError('');
     setNotices([]);
     setTurns([]);
@@ -315,6 +321,7 @@ export function LiveScreen({
 
     setPhase('permission');
     const denied = await requestMic();
+    if (generation !== connectionGeneration.current) return;
     if (denied) {
       setError(denied);
       setPhase('idle');
@@ -324,15 +331,17 @@ export function LiveScreen({
     setPhase('connecting');
     try {
       const config = await fetchConfig(client);
+      if (generation !== connectionGeneration.current) return;
       if (onConfig) onConfig(config);
-      await connect(client, config);
+      await connect(client, config, generation);
     } catch (err) {
+      if (generation !== connectionGeneration.current) return;
       setError(errorText(err));
       teardown();
     }
   }
 
-  async function connect(client: ApiClient, config: ServerConfig) {
+  async function connect(client: ApiClient, config: ServerConfig, generation: number) {
     // 다시 연결할 때 앞선 재생기의 AudioContext 가 남지 않게 먼저 닫는다.
     if (playerRef.current) playerRef.current.dispose();
 
@@ -440,7 +449,7 @@ export function LiveScreen({
       onWarning: addNotice,
       onSocketError: () => addNotice('WebSocket 오류. 이유는 서버의 error 이벤트나 종료 코드를 볼 것.'),
       onClose: info => {
-        if (!sessionRef.current) return; // 우리가 끊은 것이다
+        if (sessionRef.current !== session) return;
         addNotice(`스트림이 닫혔다 (code=${info.code ?? '-'}, reason=${info.reason || '-'}).`);
         teardown();
       },
@@ -449,6 +458,7 @@ export function LiveScreen({
 
     // ready 전에는 마이크를 흘려보내지 않는다 — 서버가 config 를 거절하면 소켓이 닫힌다.
     await session.whenReady();
+    if (generation !== connectionGeneration.current || sessionRef.current !== session) return;
 
     const capture = new MicCapture(
       {
@@ -478,6 +488,10 @@ export function LiveScreen({
     // 버튼을 누를 때 `press()` 가 연다.
     if (!hold) {
       await capture.start();
+      if (generation !== connectionGeneration.current || captureRef.current !== capture) {
+        capture.stop();
+        return;
+      }
       sendingRef.current = true;
     }
     setPhase('live');
@@ -501,6 +515,7 @@ export function LiveScreen({
     try {
       await capture.start();
     } catch (err) {
+      if (captureRef.current !== capture) return;
       // 문장은 라이브러리가 준 것을 그대로 나른다 (`MicCapture` 가 그렇게 던진다).
       setError(errorText(err));
       pressingRef.current = false;
@@ -508,7 +523,7 @@ export function LiveScreen({
       capture.stop();
       return;
     }
-    if (!pressingRef.current) {
+    if (!pressingRef.current || captureRef.current !== capture) {
       // 여는 사이에 이미 뗐다. 문은 한 번도 열리지 않았으므로 flush 도 하지 않는다.
       capture.stop();
       return;
