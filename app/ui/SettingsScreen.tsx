@@ -8,7 +8,7 @@
  *
  * **고른 값은 실제로 세션에 쓰인다.** 값은 App.tsx 가 들고 있고
  * `LiveScreen` 이 WS `config` 메시지를(`streamConfig()`), `ConnectScreen` 이 텍스트 번역의
- * 언어를(`chosenLanguages()`) 여기서 가져간다. 화면 아래의 "세션을 이 값으로 연다" 상자가
+ * 언어·provider·model을(`resolvedSettings()`/`chosenLanguages()`) 여기서 가져간다. 화면 아래의 "세션을 이 값으로 연다" 상자가
  * 그 메시지를 그대로 보여주므로, 실기기에서도 반영 여부를 눈으로 확인할 수 있다.
  *
  * **고른 값은 기기에 남는다.** 앱을 껐다 켜도 그대로다 — App.tsx 가 시작할 때 읽고

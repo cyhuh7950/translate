@@ -368,7 +368,7 @@ function Root({ isDark }: { isDark: boolean }) {
       <View style={styles.screen}>
         {/* 화면을 동시에 살려두지 않는다 — 실시간 화면이 사라지면 마이크도 함께 닫힌다. */}
         {tab === 'connect' && (
-          <ConnectScreen {...shared} config={config} onConfig={setConfig} form={form} />
+          <ConnectScreen {...shared} config={config} onConfig={setConfig} form={form} models={models} />
         )}
         {tab === 'live' && (
           <LiveScreen {...shared} onConfig={setConfig} form={form} models={models} />

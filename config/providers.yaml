@@ -27,14 +27,12 @@
 #   (모델별로 다르게 주려면 프로바이더 항목을 둘로 나누는 것이 지금 구조에서의 방법이다.)
 
 providers:
-  cerebras:
-    label: "Cerebras"
+  omniroute:
+    label: "OmniRoute"
     kind: openai_compatible
-    base_url: https://api.cerebras.ai/v1
-    api_key_env: LLM_KEY_CEREBRAS
-    default_model: zai-glm-4.7   # CJK 번역 품질이 좋다
-    # 첫 토큰이 매우 빠르다 — 실시간 모드에 유리
-    fast: true
+    base_url: https://omniroute.sinsan.kr/v1
+    api_key_env: LLM_KEY_OMNIROUTE
+    default_model: ""
 
   groq:
     label: "Groq"
