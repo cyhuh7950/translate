@@ -48,12 +48,14 @@ class OpenAICompatible(BaseLLM):
         stream: bool,
     ) -> AsyncIterator[str]:
         payload = {
-            "model": self.resolve_model(model),
             "messages": [{"role": "system", "content": system}, *messages],
             "temperature": float(self.settings.get("temperature")),
             "max_tokens": int(self.settings.get("max_output_tokens")),
             "stream": stream,
         }
+        resolved_model = self.resolve_openai_model(model)
+        if resolved_model is not None:
+            payload["model"] = resolved_model
         # 프로바이더 고유 옵션(providers.yaml 의 `options:`)을 그대로 얹는다.
         # 예: Groq 의 gpt-oss 에 reasoning_effort 를 낮춰 사고 토큰을 줄인다.
         self.merge_options(payload)

@@ -48,7 +48,7 @@ class TextTranslateRequest(BaseModel):
     target_lang: str = Field(..., description="Target language (e.g. en)")
     provider: str | None = Field(None, description="Defaults to llm.default_provider if omitted")
     model: str | None = Field(
-        None, description="Defaults to the provider's default_model if omitted"
+        None, description="Follows the provider's model policy if omitted"
     )
     style: str | None = Field(None, description="A key of prompts.styles")
     context: list[ContextTurn] | None = Field(None, description="Preceding conversation turns")
