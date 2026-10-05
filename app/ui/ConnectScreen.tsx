@@ -23,9 +23,9 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { availableProfiles, fetchConfig, readyEngines, translateText } from '../src/api';
-import type { ApiClient, ServerConfig } from '../src/api';
+import type { ApiClient, ModelsResponse, ServerConfig } from '../src/api';
 import { Button } from './Button';
-import { chosenLanguages } from './settings';
+import { chosenLanguages, resolvedSettings } from './settings';
 import type { Settings } from './settings';
 import { ui } from './theme';
 import type { Palette } from './theme';
@@ -38,6 +38,7 @@ export function ConnectScreen({
   config,
   onConfig,
   form,
+  models,
 }: {
   colors: Palette;
   /** 서버 주소·API 키는 App.tsx 가 들고 있다 — 세 화면이 같은 값을 쓴다. */
@@ -49,6 +50,8 @@ export function ConnectScreen({
   onConfig: (config: ServerConfig) => void;
   /** 설정 화면에서 고른 값. 번역 버튼이 쓸 언어가 여기서 나온다. */
   form: Settings;
+  /** 설정 화면이 조회한 모델 목록. provider 변경 시 모델도 함께 정리한다. */
+  models?: ModelsResponse | null;
 }) {
   const [text, setText] = useState('안녕하세요, 오늘 회의는 세 시에 시작합니다.');
 
@@ -110,11 +113,14 @@ export function ConnectScreen({
       onConfig(cfg);
 
       // 설정 화면에서 고른 언어로 번역한다 — 고르지 않았으면 서버의 세션 기본값이다.
+      const values = resolvedSettings(cfg, form, models);
       const langs = chosenLanguages(cfg, form);
       const out = await translateText(client, {
         text,
         source_lang: langs.source,
         target_lang: langs.target,
+        provider: values.provider,
+        model: values.model,
       });
       setResult(
         [

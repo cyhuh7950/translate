@@ -1,5 +1,5 @@
 """
-OpenAI 호환 프로바이더 — Cerebras, Groq, Mistral, OpenRouter, Upstage, OpenAI, Ollama.
+OpenAI 호환 프로바이더 — OmniRoute, Groq, Mistral, OpenRouter, Upstage, OpenAI, Ollama.
 
 이 파일 하나가 7개 프로바이더를 덮는다. 차이는 base_url 과 모델 이름뿐이고 둘 다 설정이다.
 새 OpenAI 호환 프로바이더가 생기면 providers.yaml 에 항목 하나 추가로 끝난다 — 코드 수정 없음.
@@ -29,8 +29,8 @@ class OpenAICompatible(BaseLLM):
         """
         `GET {base_url}/models` → `{"data": [{"id": ...}]}`.
 
-        7개 프로바이더가 모두 이 규격이다(실측: cerebras·groq·mistral·openrouter·
-        upstage·openai·ollama). 페이지네이션이 없는 규격이라 한 번에 다 온다 —
+        OpenAI 호환 프로바이더는 모두 이 규격을 사용한다. 페이지네이션이 없는 규격이라
+        한 번에 다 온다 —
         실측에서 openrouter 가 413개를 한 응답에 돌려줬다.
         """
         async with httpx.AsyncClient(timeout=self._models_timeout()) as c:

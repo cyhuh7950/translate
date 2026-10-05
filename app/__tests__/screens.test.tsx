@@ -208,6 +208,60 @@ describe('화면 렌더', () => {
     });
   });
 
+  it('연결 확인 텍스트 번역에도 설정한 provider와 model을 보낸다', async () => {
+    const requestBodies: string[] = [];
+    const client = {
+      baseUrl: 'https://example.test',
+      fetch: async (_url: string, init?: { body?: any }) => {
+        requestBodies.push(String(init?.body || ''));
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          text: async () =>
+            JSON.stringify({
+              text: 'translated',
+              source_lang: 'aa',
+              target_lang: 'bb',
+              provider: 'alpha',
+              model: 'alpha-small',
+              elapsed_s: 0.1,
+            }),
+          arrayBuffer: async () => new ArrayBuffer(0),
+        };
+      },
+    };
+    let tree!: ReactTestRenderer.ReactTestRenderer;
+
+    await ReactTestRenderer.act(() => {
+      tree = ReactTestRenderer.create(
+        <ConnectScreen
+          {...common}
+          makeClient={() => client}
+          config={fakeConfig()}
+          onConfig={() => {}}
+          form={{ provider: 'alpha', model: 'alpha-small', source_lang: 'aa', target_lang: 'bb' }}
+        />,
+      );
+    });
+
+    await ReactTestRenderer.act(async () => {
+      const button = tree.root.findAll(
+        node => node.props?.label === '텍스트 번역' && typeof node.props?.onPress === 'function',
+      )[0]!;
+      expect(button).toBeDefined();
+      const result = button.props.onPress();
+      if (result && typeof result.then === 'function') await result;
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 0));
+    });
+
+    expect(requestBodies).toHaveLength(1);
+    expect(JSON.parse(requestBodies[0]!)).toMatchObject({
+      provider: 'alpha',
+      model: 'alpha-small',
+    });
+  });
+
   it('LiveScreen 이 그려진다', async () => {
     await ReactTestRenderer.act(() => {
       ReactTestRenderer.create(<LiveScreen {...common} form={{}} />);
